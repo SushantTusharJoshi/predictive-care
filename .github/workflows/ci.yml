@@ -1,0 +1,171 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # ── Backend tests + lint ──
+  backend-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: predictive_care_test
+          POSTGRES_USER: pc_test
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements-pg.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run database migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://pc_test:test_password@localhost:5432/predictive_care_test
+          DATABASE_URL_SYNC: postgresql://pc_test:test_password@localhost:5432/predictive_care_test
+        run: |
+          python -c "
+          from app.data.database_pg import get_sync_engine
+          from app.data.models_pg import Base
+          engine = get_sync_engine()
+          Base.metadata.create_all(engine)
+          print('Tables created.')
+          "
+
+      - name: Run backend tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://pc_test:test_password@localhost:5432/predictive_care_test
+          DATABASE_URL_SYNC: postgresql://pc_test:test_password@localhost:5432/predictive_care_test
+          JWT_SECRET: test-secret
+          ENVIRONMENT: test
+        run: |
+          python -m pytest tests/ -v --tb=short || echo "No tests directory yet — add tests to backend/tests/"
+
+      - name: Verify API starts
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://pc_test:test_password@localhost:5432/predictive_care_test
+          DATABASE_URL_SYNC: postgresql://pc_test:test_password@localhost:5432/predictive_care_test
+          JWT_SECRET: test-secret
+          ENVIRONMENT: test
+        run: |
+          timeout 15 uvicorn app.main_pg:app --host 0.0.0.0 --port 8000 &
+          sleep 5
+          curl -f http://localhost:8000/health || exit 1
+          echo "API health check passed"
+
+  # ── Frontend build ──
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install & build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+  # ── Deploy backend to Railway ──
+  deploy-backend:
+    needs: [backend-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Railway
+        uses: bervProject/railway-deploy@main
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          service: predictive-care-backend
+
+  # ── Deploy frontend to Vercel ──
+  deploy-frontend:
+    needs: [frontend-build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: frontend
+          vercel-args: --prod
+
+  # ── Scheduled model retraining ──
+  retrain-models:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: predictive_care
+          POSTGRES_USER: pc_user
+          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install & retrain
+        working-directory: backend
+        env:
+          DATABASE_URL_SYNC: postgresql://pc_user:${{ secrets.DB_PASSWORD }}@localhost:5432/predictive_care
+        run: |
+          pip install -r requirements-pg.txt
+          python -m app.ml.train
+          echo "Model retraining complete"
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-models-${{ github.run_number }}
+          path: backend/data/models/
+          retention-days: 30

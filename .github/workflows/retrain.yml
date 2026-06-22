@@ -1,0 +1,66 @@
+name: Scheduled Model Retraining
+
+on:
+  schedule:
+    # Retrain weekly at 2am UTC on Sundays
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for manual retrain"
+        required: false
+        default: "Manual trigger"
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements-pg.txt
+
+      - name: Connect to production DB & retrain
+        working-directory: backend
+        env:
+          DATABASE_URL_SYNC: ${{ secrets.PROD_DATABASE_URL_SYNC }}
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          echo "Starting model retraining..."
+          python -m app.ml.train
+          echo "Retraining complete"
+
+      - name: Validate model quality
+        working-directory: backend
+        run: |
+          python -c "
+          import json
+          with open('data/models/metrics.json') as f:
+              metrics = json.load(f)
+          for name, m in metrics.items():
+              auc = m.get('auc', 0)
+              print(f'{name}: AUC={auc:.4f}')
+              if auc < 0.65:
+                  print(f'WARNING: {name} AUC below threshold!')
+                  exit(1)
+          print('All models pass quality gate.')
+          "
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: models-${{ github.run_number }}
+          path: backend/data/models/
+          retention-days: 90
+
+      - name: Notify on completion
+        if: always()
+        run: |
+          echo "Retraining job completed with status: ${{ job.status }}"
+          echo "Trigger: ${{ github.event.inputs.reason || 'Scheduled' }}"

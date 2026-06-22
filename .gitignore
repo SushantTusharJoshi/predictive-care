@@ -1,0 +1,28 @@
+# Backend
+backend/data/predictive_care.db
+backend/data/models/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/**/__pycache__/
+*.pyc
+.env
+backend/venv/
+backend/synthea_output/
+backend/synthea.jar
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Docker
+pg_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

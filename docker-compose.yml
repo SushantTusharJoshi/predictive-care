@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: pc-postgres
+    environment:
+      POSTGRES_DB: predictive_care
+      POSTGRES_USER: pc_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-pc_local_dev_2024}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pc_user -d predictive_care"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pc-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pc_user:${DB_PASSWORD:-pc_local_dev_2024}@db:5432/predictive_care
+      DATABASE_URL_SYNC: postgresql://pc_user:${DB_PASSWORD:-pc_local_dev_2024}@db:5432/predictive_care
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - model_data:/app/data/models
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pc-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@predictivecare.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    profiles:
+      - tools
+
+volumes:
+  pg_data:
+  model_data:
