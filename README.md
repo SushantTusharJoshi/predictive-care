@@ -1,156 +1,152 @@
-# PredictiveCare v3.1
+# PredictiveCare
 
-AI-powered healthcare risk prediction platform with HIPAA compliance, medication adherence monitoring, trust scoring, and HITL clinical workflows.
+An AI-powered clinical risk prediction platform that predicts patient ER visit risk, care needs, and medication adherence failure — before they happen. Built to the architectural standard of enterprise EHR platforms, on an open stack.
 
-## What's New in v3.1
+**Stack:** FastAPI · PostgreSQL 16 · XGBoost/LightGBM · SHAP · Groq AI · Next.js 15
 
-- **PostgreSQL 16** — Full migration from SQLite to async PostgreSQL with SQLAlchemy
-- **Synthea Integration** — Ingest real Synthea patient data or generate 100K synthetic patients
-- **Adherence Trust Score** (FR-3.2.3) — Per-patient-medication behavioral trust scoring
-- **Tiered Medication Reminders** (FR-3.2.1) — 15-min, 5-min, and 10-min post-dose alerts
-- **Pharmacy Refill Tracking** — Refill alignment feeds trust score computation
-- **HIPAA Middleware** (NFR-4.3.1) — Every PHI access audit-logged with IP, user, patient_id
-- **HITL Scheduling Gate** (FR-3.3.3) — No autonomous scheduling; clinician approval required
-- **Clinician Feedback Loop** (FR-3.4.3) — Rate predictions for model retraining
-- **Prediction Override** (FR-3.4.2) — Override model output with documented reasoning
-- **HIPAA Data Flow Endpoint** — `/hipaa/data-flow` for compliance audits
-- **Frontend Hydration Fix** — No more SSR/localStorage mismatch errors
+---
+
+## What No Other Platform Does
+
+Commercial EHR platforms (Epic, Cerner, Athena) surface risk scores. They do not explain them, act on them proactively, or learn from clinician disagreement. PredictiveCare closes that loop end-to-end:
+
+| Capability | Epic / Cerner | PredictiveCare |
+|---|---|---|
+| Risk prediction | ✓ (black box) | ✓ Ensemble ML with SHAP explainability per patient |
+| Narrative explanation | ✗ | ✓ Groq LLM generates plain-English risk summaries |
+| Medication trust scoring | ✗ | ✓ Per-patient-per-medication behavioral trust score |
+| Proactive tiered reminders | ✗ | ✓ 15-min / 5-min / dose-due / 10-min-missed cycles |
+| Human-in-the-loop gate | ✗ | ✓ No autonomous scheduling; clinician approval required |
+| Clinician feedback loop | ✗ | ✓ Overrides and ratings feed model retraining pipeline |
+| HIPAA de-identification before LLM | ✗ | ✓ PHI stripped before any Groq API call |
+| Bias audit | ✗ | ✓ Archetype distribution fairness monitoring |
+| Open deployable stack | ✗ (vendor lock-in) | ✓ FastAPI + PostgreSQL + Railway/Vercel |
+
+The core insight: **risk prediction is useless without trust-weighted action**. If a patient has a low adherence trust score, a reminder alone won't work — it needs escalation. PredictiveCare is the only open platform that chains prediction → trust scoring → tiered intervention → clinician gate into a single pipeline.
+
+---
+
+## ML Architecture
+
+### Ensemble Models
+- **XGBoost + LightGBM** ensemble trained on Synthea-based synthetic patient cohorts
+- Temporal train/test splits (no data leakage — an earlier version hit AUC=1.0 due to non-temporal splits; this was caught and corrected)
+
+### Prediction Horizons
+| Model | AUC | Notes |
+|---|---|---|
+| ER Visit (30d) | 0.77 | Primary triage signal |
+| Care Need (90d) | 0.73 | Care coordination planning |
+| Care Need (30d) | 0.65 | Short-horizon intervention |
+| Adherence Trust Score | Per-patient | Behavioral, not predictive |
+| Next Illness (multiclass) | In training | ICD-10 category prediction |
+
+### SHAP Explainability
+Every prediction surfaces per-patient feature attribution via SHAP values. The Groq LLM (`llama-3.1-70b-versatile`) converts SHAP output into plain-English clinical narratives — after PHI de-identification.
+
+---
+
+## Data Scale
+
+- **215M+ adherence events** generated across synthetic patient cohorts
+- PostgreSQL 16 with async SQLAlchemy ORM and indexed lookups
+- Risk scores pre-computed at startup; no per-request ML inference on patient lists (eliminates timeout risk)
+
+---
+
+## HIPAA Compliance Architecture
+
+- Every PHI access audit-logged with IP, user, patient_id, and timestamp
+- De-identification pipeline strips names, DOB, ZIP, and identifiers before any LLM call
+- RBAC with 5 roles: Admin, Physician, Nurse, Care Coordinator, Pharmacist
+- JWT authentication on all endpoints
+
+---
+
+## Trust Score + Reminder Engine
+
+The trust score is a per-patient-per-medication behavioral signal computed from:
+- Adherence event history (taken / missed / late)
+- Pharmacy refill alignment (refill before or after depletion)
+- Streak patterns and dose timing variance
+
+Trust score drives reminder dispatch tier:
+- **High trust** → standard 15-min and 5-min pre-dose reminders
+- **Low trust** → escalated to clinician flag + 10-min post-miss alert
+
+---
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|------------|
-| Backend | FastAPI 0.115, Python 3.12+, SQLAlchemy async |
-| Database | PostgreSQL 16 (Homebrew or Docker) |
-| ML | XGBoost + LightGBM ensemble, SHAP, scikit-learn |
+|---|---|
+| Backend | FastAPI 0.115, Python 3.12, SQLAlchemy async |
+| Database | PostgreSQL 16 (Homebrew / Docker) |
+| ML | XGBoost, LightGBM, scikit-learn, SHAP |
 | LLM | Groq API (llama-3.1-70b-versatile) |
 | Frontend | Next.js 15, React 19, Recharts, Tailwind CSS |
+| Auth | JWT RBAC |
+| CI/CD | GitHub Actions, weekly model retraining |
 | Deploy | Railway (backend) + Vercel (frontend) |
-| Security | JWT RBAC, HIPAA audit logging, de-identification |
 
-## Quick Start
+---
 
-### Option 1: Docker (Recommended)
+## Known Gaps (Planned Fixes)
 
-```bash
-# Start PostgreSQL + Backend
-docker compose up -d db
-sleep 5
+These are honest architectural limitations, not minor bugs:
 
-# Install dependencies
-cd backend && pip install -r requirements-pg.txt
-cd ../frontend && npm install && cd ..
+| Gap | Impact | Planned Fix |
+|---|---|---|
+| Frontend hydration error | Role read from `localStorage` during SSR causes client/server mismatch | Client-side guard with `useEffect` before reading localStorage |
+| HITL workflow frontend incomplete | Backend HITL endpoints exist; UI not wired up | Build clinician approval queue page |
+| Bias audit visualization missing | Admin page has no fairness chart | Add Recharts breakdown by race/ethnicity/archetype |
+| Search by patient UUID not implemented | Can only search by name | Add UUID search path to `/search` endpoint and frontend |
+| ORM-based bulk insert is slow | 150–200M rows via SQLAlchemy ORM takes 10+ hours | Replace with raw SQL `COPY` or `execute_many` bulk inserts |
+| No real patient data pipeline | Currently synthetic only | Integrate real Synthea FHIR export; add cloud BAA for PHI |
+| No encryption at rest | Database not encrypted | Add PostgreSQL TDE or cloud KMS |
+| Auth is JWT only | No SSO / enterprise login | Add OAuth2/OIDC for hospital system integration |
 
-# Generate 100K synthetic patients with Synthea-realistic data
-cd backend && python -m app.data.ingest_synthea --fallback --max-patients 100000
+---
 
-# Train ML models
-python -m app.ml.train_pg
-
-# Start backend
-uvicorn app.main_pg:app --reload --port 8000 &
-
-# Start frontend
-cd ../frontend && npm run dev
-```
-
-### Option 2: Local PostgreSQL (macOS)
+## Local Setup
 
 ```bash
-# If using Homebrew PostgreSQL
-/opt/homebrew/opt/postgresql@16/bin/psql -U postgres -c "CREATE USER pc_user WITH PASSWORD 'pc_local_dev_2024';"
-/opt/homebrew/opt/postgresql@16/bin/psql -U postgres -c "CREATE DATABASE predictive_care OWNER pc_user;"
+# 1. Start PostgreSQL
+/opt/homebrew/opt/postgresql@16/bin/pg_ctl -D /opt/homebrew/var/postgresql@16 start
 
-# Then follow the same steps as above (skip docker compose)
+# 2. Backend
+cd backend
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env  # fill in DB credentials and GROQ_API_KEY
+uvicorn app.main_pg:app --reload --port 8000
+
+# 3. Frontend
+cd frontend
+npm install
+npm run dev
 ```
 
-### Option 3: One-Command Setup
+Open [http://localhost:3000](http://localhost:3000)
 
-```bash
-make setup    # DB + deps + tables
-make ingest-fallback  # 100K patients
-make train    # ML models
-make dev      # Start everything
-```
-
-Open http://localhost:3000
-
-## Login Credentials
-
+### Default Logins
 | Username | Password | Role |
-|----------|----------|------|
-| admin | admin | Admin (full access) |
-| physician | physician | Physician (patients + predictions + HITL) |
-| nurse | nurse | Nurse (patients + adherence + reminders) |
-| coordinator | coordinator | Coordinator (patients + scheduling) |
+|---|---|---|
+| admin | admin | Admin |
+| physician | physician | Physician |
+| nurse | nurse | Nurse |
+| coordinator | coordinator | Care Coordinator |
 | dr.patel | dr.patel | Physician |
 | rn.williams | rn.williams | Nurse |
 
-## API Endpoints
+---
 
-### Core
-- `GET /health` — Health check
-- `POST /auth/login` — Authenticate
-- `GET /patients` — Paginated patient list with risk scores
-- `GET /patients/{id}` — Full patient detail + predictions
-- `GET /search?q=` — Quick search by name or UUID
+## Market Context
 
-### Predictions & Explainability
-- `POST /predict/{id}` — On-demand prediction for one patient
-- `GET /patients/{id}/shap-narrative/{type}` — AI-generated SHAP explanation
+The clinical AI market is dominated by Epic's proprietary models and point solutions (Sepsis prediction tools, readmission risk models) that are siloed, unexplainable, and inaccessible to smaller health systems. PredictiveCare is positioned as the open alternative: a full-stack prediction + intervention + feedback platform that any health system can self-host, audit, and extend — without vendor lock-in or black-box risk scores.
 
-### Adherence & Reminders
-- `GET /patients/{id}/reminders` — Medication reminder schedule with trust scores
-- `GET /patients/{id}/adherence-trend` — 30-day adherence data
-- `GET /patients/{id}/longitudinal` — 5-year behavior analysis
+---
 
-### HITL (Human-in-the-Loop)
-- `POST /patients/{id}/schedule-recommendation` — Generate scheduling recommendation
-- `POST /schedule/{rec_id}/action` — Approve/dismiss recommendation
-- `POST /patients/{id}/feedback` — Rate prediction accuracy
-- `POST /patients/{id}/override` — Override prediction with reason
+## GitHub
 
-### Admin & Compliance
-- `GET /stats` — Dashboard statistics
-- `GET /audit` — HIPAA audit log (admin only)
-- `GET /models/metrics` — ML model performance
-- `GET /hipaa/data-flow` — HIPAA compliance documentation
-
-## HIPAA Data Flow
-
-```
-Request → JWT Auth → RBAC Check → HIPAA Audit Middleware
-    → De-identify PHI (if LLM call) → Process → Audit Log → Response
-```
-
-Every PHI access is logged to the `audit_log` table with: timestamp, username, role,
-action, patient_id_accessed, IP address, and user agent.
-
-## Deployment
-
-### Backend → Railway
-
-```bash
-cd backend && railway up
-railway variables set DATABASE_URL=...
-railway variables set JWT_SECRET=...
-railway variables set GROQ_API_KEY=...
-```
-
-### Frontend → Vercel
-
-```bash
-cd frontend && vercel --prod
-vercel env add NEXT_PUBLIC_API_BASE  # → https://your-backend.railway.app
-```
-
-## Model Architecture
-
-XGBoost + LightGBM ensemble trained on:
-- Demographics (age, gender, BMI, SDOH risks)
-- Adherence patterns (90-day rate, trend, response latency)
-- Encounter history (ER visits, inpatient stays)
-- Pharmacy data (refill gaps, alignment)
-- Archetype classification (excellent/good/moderate/poor/erratic)
-
-Targets: ER visit (30d), Care need (90d)
+[github.com/SushantTusharJoshi/predictive-care](https://github.com/SushantTusharJoshi/predictive-care)
