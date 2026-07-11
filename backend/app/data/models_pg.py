@@ -6,7 +6,8 @@ from sqlalchemy import (
     Column, String, Integer, Float, Boolean, Date, DateTime, Text,
     ForeignKey, Index, JSON, func
 )
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON
 from sqlalchemy.orm import declarative_base, relationship
 import uuid
 
@@ -30,7 +31,7 @@ class Patient(Base):
     bmi = Column(Float)
     smoker = Column(Boolean, default=False)
     n_sdoh_risks = Column(Integer, default=0)
-    sdoh_risk_factors = Column(ARRAY(String), default=[])
+    sdoh_risk_factors = Column(JSON, default=[])
     adherence_archetype = Column(String(30))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
