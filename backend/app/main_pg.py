@@ -1,42 +1,47 @@
 """PredictiveCare v3.1 — Production-ready FastAPI backend.
 Includes: patient creation, reminder dispatch, trust scoring, HITL, HIPAA.
 """
+import json
 import logging
 import os
-import json
 import pickle
-from datetime import datetime, date, timedelta
 from contextlib import asynccontextmanager
-from typing import Optional
+from datetime import date, datetime, timedelta
 
-import numpy as np
 import pandas as pd
-from fastapi import FastAPI, Depends, HTTPException, Request, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.config import get_settings
-from app.services.auth import authenticate, require_role, create_token, USERS
 from app.data.database_pg import (
-    init_db, close_db, search_patients, get_patient_detail,
-    get_patient_features, get_longitudinal_analysis,
-    get_medication_reminders, get_similar_patients_data,
-    log_audit, get_audit_log, get_dashboard_stats,
-    create_scheduling_recommendation, action_scheduling_recommendation,
+    action_scheduling_recommendation,
+    close_db,
+    create_scheduling_recommendation,
+    get_audit_log,
+    get_dashboard_stats,
+    get_longitudinal_analysis,
+    get_medication_reminders,
+    get_patient_detail,
+    get_patient_features,
+    init_db,
+    log_audit,
     log_hitl_action,
+    search_patients,
 )
-from app.services.groq_narratives import generate_shap_narrative, generate_longitudinal_narrative
-from app.services.trust_score import compute_trust_score, compute_all_trust_scores
-from app.services.reminders import (
-    get_patient_reminder_schedule, dispatch_reminder,
-    record_patient_response, check_missed_doses,
-)
-from app.services.create_patient import create_patient
 from app.middleware.hipaa import HipaaAuditMiddleware
+from app.services.auth import authenticate, create_token, require_role
+from app.services.create_patient import create_patient
+from app.services.groq_narratives import generate_longitudinal_narrative, generate_shap_narrative
+from app.services.reminders import (
+    check_missed_doses,
+    get_patient_reminder_schedule,
+    record_patient_response,
+)
+from app.services.trust_score import compute_all_trust_scores, compute_trust_score
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -460,7 +465,7 @@ def _predict_with_shap(features: dict) -> dict:
                 sv = explainer.shap_values(row)
                 if isinstance(sv, list): sv = sv[1]
                 vals = sv[0] if len(sv.shape) > 1 else sv
-                indexed = sorted(zip(fc, vals), key=lambda x: abs(x[1]), reverse=True)
+                indexed = sorted(zip(fc, vals, strict=False), key=lambda x: abs(x[1]), reverse=True)
                 top_features = [{"feature": f, "shap_value": round(float(v), 4),
                                  "value": features.get(f, 0)} for f, v in indexed[:8]]
             results[name] = {

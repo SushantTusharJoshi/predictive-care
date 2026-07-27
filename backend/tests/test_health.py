@@ -1,6 +1,4 @@
 """Basic API smoke tests."""
-import pytest
-from unittest.mock import patch, AsyncMock
 
 
 def test_settings_load():

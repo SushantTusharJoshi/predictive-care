@@ -2,17 +2,18 @@
 ML training pipeline v2.
 Reads from SQLite, trains XGBoost+LightGBM ensemble, saves SHAP explainers.
 """
-import json, pickle, sqlite3, warnings
+import json
+import pickle
+import sqlite3
+import warnings
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, classification_report
-from sklearn.preprocessing import LabelEncoder
-import xgboost as xgb
 import lightgbm as lgb
+import pandas as pd
 import shap
+import xgboost as xgb
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
 
 warnings.filterwarnings("ignore")
 

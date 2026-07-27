@@ -1,8 +1,7 @@
 """Tests for authentication and RBAC."""
 import pytest
-from app.services.auth import (
-    authenticate, create_token, verify_token, has_permission, _extract_user
-)
+
+from app.services.auth import _extract_user, authenticate, create_token, has_permission, verify_token
 
 
 class TestAuthenticate:

@@ -2,10 +2,10 @@
 Database access layer for SQLite.
 Handles all queries with proper pagination, search, and indexing.
 """
-import sqlite3, json, os
-from pathlib import Path
+import json
+import sqlite3
 from contextlib import contextmanager
-from typing import Optional
+from pathlib import Path
 
 DB_PATH = Path("data/predictive_care.db")
 
@@ -27,7 +27,7 @@ def dict_from_row(row):
     return dict(row)
 
 
-def get_patient(patient_id: str) -> Optional[dict]:
+def get_patient(patient_id: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute("SELECT * FROM patients WHERE patient_id = ?", (patient_id,)).fetchone()
         if row:

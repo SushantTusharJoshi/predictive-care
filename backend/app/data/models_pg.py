@@ -2,14 +2,11 @@
 Includes: PharmacyRefill, TrustScore, ReminderLog, SchedulingRecommendation,
 HitlAction — all required by the requirements spec.
 """
-from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, Date, DateTime, Text,
-    ForeignKey, Index, JSON, func
-)
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy import JSON
-from sqlalchemy.orm import declarative_base, relationship
 import uuid
+
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 

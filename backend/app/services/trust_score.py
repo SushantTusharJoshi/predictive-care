@@ -6,7 +6,7 @@ Computes a 0.0–1.0 score per patient-medication pair from:
   - Clinical outcome correlation
 """
 import logging
-from datetime import date, timedelta
+
 from sqlalchemy import text
 
 from app.data.database_pg import get_session

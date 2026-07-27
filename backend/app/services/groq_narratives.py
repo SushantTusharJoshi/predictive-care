@@ -1,10 +1,10 @@
 """Groq API integration for SHAP narrative generation — v3.1.
 Uses Llama 3.1 70B. De-identifies PHI before any external API call.
 """
-import os
 import json
+import os
+
 import httpx
-from typing import Optional
 
 from app.middleware.hipaa import de_identify_for_llm
 
@@ -17,7 +17,7 @@ async def generate_shap_narrative(
     patient_detail: dict,
     prediction_info: dict,
     prediction_type: str,
-) -> Optional[str]:
+) -> str | None:
     """Generate plain-English narrative for a prediction.
     Accepts the full patient detail dict and a prediction result dict.
     """
@@ -82,7 +82,7 @@ def _fallback_narrative(prediction_type: str, probability: float, top_features: 
     return narrative
 
 
-async def generate_longitudinal_narrative(patient_detail: dict, trend_data: dict) -> Optional[str]:
+async def generate_longitudinal_narrative(patient_detail: dict, trend_data: dict) -> str | None:
     """Generate narrative analyzing 5-year behavior patterns."""
     if not GROQ_API_KEY:
         return _fallback_longitudinal(trend_data)

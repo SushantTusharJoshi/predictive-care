@@ -3,11 +3,15 @@ Synthetic patient data generator v2.
 50K patients, 5 years longitudinal, medication reminder simulation.
 Outputs to SQLite for fast indexed queries at scale.
 """
-import json, random, uuid, sqlite3, os, time
+import json
+import os
+import random
+import sqlite3
+import time
+import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
 
 NUM_PATIENTS = 50_000
@@ -163,7 +167,7 @@ def _gen_adherence(patients, medications):
     for m in medications:
         meds_by_patient.setdefault(m["patient_id"], []).append(m)
 
-    patient_map = {p["patient_id"]: p for p in patients}
+    {p["patient_id"]: p for p in patients}
     archetypes_map = {}
     batch = []
 

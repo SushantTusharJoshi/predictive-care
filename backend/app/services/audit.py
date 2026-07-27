@@ -1,7 +1,6 @@
 """Audit logging service for HIPAA compliance."""
-import json
-from datetime import datetime
 from collections import deque
+from datetime import datetime
 
 AUDIT_LOG = deque(maxlen=10000)
 

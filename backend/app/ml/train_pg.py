@@ -7,17 +7,15 @@ Usage:
 """
 import json
 import logging
-import os
 import pickle
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
-import xgboost as xgb
 import lightgbm as lgb
+import pandas as pd
 import shap
+import xgboost as xgb
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.model_selection import train_test_split
 from sqlalchemy import text
 
 from app.config import get_settings
@@ -187,7 +185,7 @@ def train_model(X_train, X_test, y_train, y_test, model_name: str):
         explainer = None
 
     importances = sorted(
-        zip(FEATURE_COLS, xgb_model.feature_importances_.tolist()),
+        zip(FEATURE_COLS, xgb_model.feature_importances_.tolist(), strict=False),
         key=lambda x: x[1], reverse=True,
     )
 

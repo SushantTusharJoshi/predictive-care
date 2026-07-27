@@ -2,12 +2,13 @@
 Similar patient matching using K-Nearest Neighbors on demographics.
 Works with both SQLite (v2) and PostgreSQL (v3) backends.
 """
-import numpy as np
 import pickle
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
+
+import numpy as np
 from sklearn.neighbors import NearestNeighbors
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 MODEL_PATH = Path("data/models/knn_similar.pkl")
 
@@ -68,6 +69,7 @@ def build_knn_index_from_pg():
     """Build KNN index from PostgreSQL database."""
     global _knn_model, _scaler, _patient_ids
     from sqlalchemy import text as sa_text
+
     from app.data.database_pg import get_sync_engine
 
     engine = get_sync_engine()
@@ -183,7 +185,7 @@ def find_similar_patients(patient_id: str, k: int = 10, knn_data=None) -> list:
     distances, indices = _knn_model.kneighbors(query_scaled, n_neighbors=min(k + 1, len(_patient_ids)))
 
     results = []
-    for dist, idx in zip(distances[0], indices[0]):
+    for dist, idx in zip(distances[0], indices[0], strict=False):
         sim_id = _patient_ids[idx]
         if sim_id == patient_id:
             continue

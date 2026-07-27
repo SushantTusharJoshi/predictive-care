@@ -1,6 +1,6 @@
 """Patient creation + auto-classification (to be added to database_pg.py)."""
 import uuid as uuid_mod
-from datetime import date
+
 from app.data.database_pg import get_session
 from app.data.models_pg import Patient
 

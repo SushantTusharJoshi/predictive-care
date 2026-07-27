@@ -18,14 +18,20 @@ from pathlib import Path
 
 import numpy as np
 from sqlalchemy import text
-from sqlalchemy.orm import Session
 
-from app.config import get_settings
-from app.data.models_pg import (
-    Base, Patient, Diagnosis, Medication, AdherenceEvent,
-    LabResult, Vital, Encounter, PharmacyRefill, TrustScore,
-)
 from app.data.database_pg import get_sync_engine, get_sync_session_factory
+from app.data.models_pg import (
+    AdherenceEvent,
+    Base,
+    Diagnosis,
+    Encounter,
+    LabResult,
+    Medication,
+    Patient,
+    PharmacyRefill,
+    TrustScore,
+    Vital,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

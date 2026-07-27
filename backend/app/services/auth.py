@@ -1,10 +1,8 @@
 """Authentication, RBAC, and JWT token management for PredictiveCare v3.1."""
-import os
 from datetime import datetime, timedelta
-from typing import Optional
 
-from fastapi import Header, HTTPException, Depends
-from jose import jwt, JWTError
+from fastapi import Header, HTTPException
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from app.config import get_settings
@@ -39,7 +37,7 @@ ROLE_PERMISSIONS = {
 }
 
 
-def authenticate(username: str, password: str) -> Optional[dict]:
+def authenticate(username: str, password: str) -> dict | None:
     """Validate credentials and return user info (no token yet)."""
     user = USERS.get(username)
     if not user or not pwd_ctx.verify(password, user["password"]):
@@ -59,7 +57,7 @@ def create_token(user: dict) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def verify_token(token: str) -> Optional[dict]:
+def verify_token(token: str) -> dict | None:
     """Decode and validate a JWT token."""
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -72,7 +70,7 @@ def has_permission(role: str, permission: str) -> bool:
     return permission in ROLE_PERMISSIONS.get(role, [])
 
 
-def _extract_user(authorization: Optional[str]) -> dict:
+def _extract_user(authorization: str | None) -> dict:
     """Extract user from Authorization header."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing or invalid Authorization header")

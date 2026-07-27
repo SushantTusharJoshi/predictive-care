@@ -4,18 +4,26 @@ Fixed: String import order, added pharmacy_refills queries, trust score queries.
 import logging
 import uuid as uuid_mod
 from contextlib import asynccontextmanager
-from typing import Optional
 from datetime import date, timedelta
 
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import create_engine, select, func, text, and_, or_, desc, asc, String as SAString
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import String as SAString
+from sqlalchemy import and_, asc, create_engine, desc, func, or_, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.config import get_settings
 from app.data.models_pg import (
-    Base, Patient, Diagnosis, Medication, AdherenceEvent, PharmacyRefill,
-    LabResult, Vital, Encounter, AuditLog, ModelMetadata, TrustScore,
-    ReminderLog, SchedulingRecommendation, HitlAction,
+    AdherenceEvent,
+    AuditLog,
+    Base,
+    Encounter,
+    HitlAction,
+    LabResult,
+    Medication,
+    Patient,
+    SchedulingRecommendation,
+    TrustScore,
+    Vital,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,7 +152,7 @@ async def search_patients(
         }
 
 
-async def get_patient_detail(patient_id: str) -> Optional[dict]:
+async def get_patient_detail(patient_id: str) -> dict | None:
     try:
         pid = uuid_mod.UUID(patient_id)
     except ValueError:
@@ -226,7 +234,7 @@ async def get_patient_detail(patient_id: str) -> Optional[dict]:
         }
 
 
-async def get_patient_features(patient_id: str) -> Optional[dict]:
+async def get_patient_features(patient_id: str) -> dict | None:
     try:
         pid = uuid_mod.UUID(patient_id)
     except ValueError:
@@ -338,7 +346,7 @@ async def get_medication_reminders(patient_id: str) -> dict:
     pid = uuid_mod.UUID(patient_id)
     async with get_session() as session:
         meds_result = await session.execute(
-            select(Medication).where(and_(Medication.patient_id == pid, Medication.active == True)))
+            select(Medication).where(and_(Medication.patient_id == pid, Medication.active)))
         meds = meds_result.scalars().all()
 
         seven_days_ago = date.today() - timedelta(days=7)

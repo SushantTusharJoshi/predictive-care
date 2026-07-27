@@ -3,6 +3,7 @@ Data Flow: Request → Auth → HIPAA Audit → De-identify (if LLM) → Respons
 """
 import logging
 import time
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -22,7 +23,7 @@ class HipaaAuditMiddleware(BaseHTTPMiddleware):
 
         # Extract client info for audit
         client_ip = request.client.host if request.client else "unknown"
-        user_agent = request.headers.get("user-agent", "")[:500]
+        request.headers.get("user-agent", "")[:500]
 
         response: Response = await call_next(request)
 

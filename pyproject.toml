@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 target-version = "py312"
 line-length = 120
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+ignore = ["E501", "E701", "E702", "E741", "B008", "B017"]
 
 [tool.ruff.isort]
 known-first-party = ["app"]

@@ -1,5 +1,5 @@
 """Tests for trust score classification logic."""
-from app.services.trust_score import classify, THRESHOLD_HIGH, THRESHOLD_LOW, _recommend_action
+from app.services.trust_score import THRESHOLD_HIGH, THRESHOLD_LOW, _recommend_action, classify
 
 
 class TestClassify:

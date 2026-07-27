@@ -6,13 +6,12 @@ via Twilio (SMS) + FCM/APNs (push). For the demo, it computes the schedule and
 logs dispatches to the reminder_logs table.
 """
 import logging
-from datetime import datetime, date, timedelta, time
-from typing import Optional
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import text
 
 from app.data.database_pg import get_session
-from app.data.models_pg import ReminderLog, AdherenceEvent
+from app.data.models_pg import AdherenceEvent, ReminderLog
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +123,7 @@ async def record_patient_response(patient_id: str, medication_name: str,
                                     response: str, taken_time: str = None) -> dict:
     """Record a patient's response to a medication reminder.
     response: YES / NO / SNOOZE / NO_RESPONSE
-    
+
     FR-3.2.4: If trust score < 0.6 and response is YES, flag as Unverified.
     """
     async with get_session() as session:
