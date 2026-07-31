@@ -5,7 +5,8 @@ def test_settings_load():
     """Settings can be loaded from env."""
     from app.config import Settings
     s = Settings(database_url="postgresql+asyncpg://test:test@localhost/test",
-                 database_url_sync="postgresql://test:test@localhost/test")
+                 database_url_sync="postgresql://test:test@localhost/test",
+                 environment="development")
     assert s.environment == "development"
     assert "test" in s.database_url
 

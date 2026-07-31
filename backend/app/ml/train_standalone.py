@@ -192,7 +192,7 @@ def train_model(X_train, X_test, y_train, y_test, model_name: str) -> dict | Non
     print(f"    Test:  {len(X_test)} samples, positive rate: {pos_test:.4f}")
 
     if pos_train == 0 or pos_test == 0:
-        print(f"    SKIPPING: no positive samples")
+        print("    SKIPPING: no positive samples")
         return None
 
     scale = max(1, (len(y_train) - y_train.sum()) / max(y_train.sum(), 1))

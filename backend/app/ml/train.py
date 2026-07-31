@@ -12,7 +12,7 @@ import lightgbm as lgb
 import pandas as pd
 import shap
 import xgboost as xgb
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import roc_auc_score
 
 warnings.filterwarnings("ignore")
 
