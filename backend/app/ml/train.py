@@ -12,8 +12,7 @@ import lightgbm as lgb
 import pandas as pd
 import shap
 import xgboost as xgb
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 
 warnings.filterwarnings("ignore")
 
@@ -99,13 +98,24 @@ def _build_features_df():
         GROUP BY patient_id
     """, conn)
 
-    # Care need target: had inpatient/ER in last 90 days
+    # Care need 90d target: had inpatient/ER in last 90 days
     care_target = pd.read_sql("""
         SELECT patient_id, 1 as care_need_90d
         FROM encounters
         WHERE encounter_type IN ('er','inpatient') AND encounter_date >= date('now', '-90 days')
         GROUP BY patient_id
     """, conn)
+
+    # Care need 30d target: had inpatient/ER in last 30 days
+    care_30d_target = pd.read_sql("""
+        SELECT patient_id, 1 as care_need_30d
+        FROM encounters
+        WHERE encounter_type IN ('er','inpatient','urgent_care') AND encounter_date >= date('now', '-30 days')
+        GROUP BY patient_id
+    """, conn)
+
+    # Patient created_at for temporal split
+    created_at = pd.read_sql("SELECT patient_id, created_at FROM patients", conn)
 
     conn.close()
 
@@ -120,9 +130,12 @@ def _build_features_df():
 
     df = df.merge(er_target, on="patient_id", how="left")
     df = df.merge(care_target, on="patient_id", how="left")
+    df = df.merge(care_30d_target, on="patient_id", how="left")
+    df = df.merge(created_at, on="patient_id", how="left")
 
     df["er_visit_30d"] = df["er_visit_30d"].fillna(0).astype(int)
     df["care_need_90d"] = df["care_need_90d"].fillna(0).astype(int)
+    df["care_need_30d"] = df["care_need_30d"].fillna(0).astype(int)
 
     # Adherence trend
     df["adherence_rate_90d"] = df["adherence_rate_90d"].fillna(0.5)
@@ -175,6 +188,13 @@ def _train_model(X_train, y_train, X_test, y_test, name):
     }
 
 
+def _temporal_split(df, test_fraction=0.2):
+    """TRUE temporal split: oldest patients train, newest patients test."""
+    df_sorted = df.sort_values("created_at").reset_index(drop=True)
+    split_idx = int(len(df_sorted) * (1 - test_fraction))
+    return df_sorted.iloc[:split_idx], df_sorted.iloc[split_idx:]
+
+
 def train():
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -182,19 +202,20 @@ def train():
     df = _build_features_df()
     print(f"  Total patients: {len(df)}")
 
-    # Time-based split: use created_at or random 80/20
-    X = df[FEATURE_COLS]
+    # Temporal split: oldest patients train, newest patients test
+    train_df, test_df = _temporal_split(df)
+    print(f"  Temporal split: train {len(train_df)}, test {len(test_df)}")
+
+    X_tr = train_df[FEATURE_COLS]
+    X_te = test_df[FEATURE_COLS]
     models_info = {}
 
-    # --- ER Visit 30d ---
-    y_er = df["er_visit_30d"]
-    X_tr, X_te, y_tr, y_te = train_test_split(X, y_er, test_size=0.2, stratify=y_er, random_state=42)
-    models_info["er_visit_30d"] = _train_model(X_tr, y_tr, X_te, y_te, "ER Visit 30d")
-
-    # --- Care Need 90d ---
-    y_care = df["care_need_90d"]
-    X_tr, X_te, y_tr, y_te = train_test_split(X, y_care, test_size=0.2, stratify=y_care, random_state=42)
-    models_info["care_need_90d"] = _train_model(X_tr, y_tr, X_te, y_te, "Care Need 90d")
+    for target, label in [("er_visit_30d", "ER Visit 30d"),
+                          ("care_need_90d", "Care Need 90d"),
+                          ("care_need_30d", "Care Need 30d")]:
+        y_tr = train_df[target]
+        y_te = test_df[target]
+        models_info[target] = _train_model(X_tr, y_tr, X_te, y_te, label)
 
     # --- Adherence Trust Score (regression-like: use archetype as proxy) ---
     arch_map = {"excellent": 0.95, "good": 0.80, "moderate": 0.60, "poor": 0.35, "erratic": 0.45}

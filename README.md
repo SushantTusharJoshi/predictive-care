@@ -29,17 +29,25 @@ The core insight: **risk prediction is useless without trust-weighted action**. 
 ## ML Architecture
 
 ### Ensemble Models
-- **XGBoost + LightGBM** ensemble trained on Synthea-based synthetic patient cohorts
-- Temporal train/test splits (no data leakage — an earlier version hit AUC=1.0 due to non-temporal splits; this was caught and corrected)
+- **XGBoost + LightGBM** ensemble trained on 50K Synthea-based synthetic patient cohorts
+- **True temporal train/test split**: oldest 80% of patients train the model, newest 20% are held out for evaluation — no future data leaks into training (an earlier version used random splits and hit AUC=1.0 due to data leakage; this was caught and corrected)
 
-### Prediction Horizons
-| Model | AUC | Notes |
-|---|---|---|
-| ER Visit (30d) | 0.77 | Primary triage signal |
-| Care Need (90d) | 0.73 | Care coordination planning |
-| Care Need (30d) | 0.65 | Short-horizon intervention |
-| Adherence Trust Score | Per-patient | Behavioral, not predictive |
-| Next Illness (multiclass) | In training | ICD-10 category prediction |
+### Prediction Horizons (Temporal Split, 50K Patients)
+| Model | AUC | Precision | Recall | F1 | Algorithm | Notes |
+|---|---|---|---|---|---|---|
+| ER Visit (30d) | 0.74 | 0.49 | 0.64 | 0.56 | LightGBM | Primary triage signal |
+| Care Need (90d) | 0.74 | 0.69 | 0.66 | 0.68 | LightGBM | Care coordination planning |
+| Care Need (30d) | 0.67 | 0.21 | 0.50 | 0.30 | LightGBM | Short-horizon intervention |
+| Adherence Trust Score | — | — | — | — | Behavioral | Per-patient, not predictive |
+
+> **Note**: Metrics above are from `train_standalone.py` on synthetic data with a true temporal split. Real clinical data would likely yield higher AUC (0.75–0.85) due to richer feature signals.
+
+### Top Predictive Features (by importance)
+1. BMI
+2. Heart rate (avg)
+3. Response latency (avg time to take medication)
+4. Systolic blood pressure (avg)
+5. Adherence rate (90-day)
 
 ### SHAP Explainability
 Every prediction surfaces per-patient feature attribution via SHAP values. The Groq LLM (`llama-3.1-70b-versatile`) converts SHAP output into plain-English clinical narratives — after PHI de-identification.

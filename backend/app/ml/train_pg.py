@@ -14,8 +14,7 @@ import lightgbm as lgb
 import pandas as pd
 import shap
 import xgboost as xgb
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, f1_score, precision_score, recall_score, roc_auc_score
 from sqlalchemy import text
 
 from app.config import get_settings
@@ -109,7 +108,16 @@ def build_feature_matrix():
                        WHERE e3.patient_id = p.patient_id
                        AND e3.encounter_type IN ('er', 'inpatient', 'urgent_care')
                        AND e3.encounter_date >= CURRENT_DATE - INTERVAL '90 days') > 0
-                 THEN 1 ELSE 0 END as care_need_90d
+                 THEN 1 ELSE 0 END as care_need_90d,
+
+            -- LABEL 3: Any ER or inpatient encounter in last 30 days
+            CASE WHEN (SELECT COUNT(*) FROM encounters e4
+                       WHERE e4.patient_id = p.patient_id
+                       AND e4.encounter_type IN ('er', 'inpatient', 'urgent_care')
+                       AND e4.encounter_date >= CURRENT_DATE - INTERVAL '30 days') > 0
+                 THEN 1 ELSE 0 END as care_need_30d,
+
+            p.created_at
 
         FROM patients p
         ORDER BY RANDOM()
@@ -204,27 +212,38 @@ def train_model(X_train, X_test, y_train, y_test, model_name: str):
     }
 
 
+def temporal_split(df, test_fraction=0.2):
+    """TRUE temporal split: oldest patients train, newest patients test."""
+    df_sorted = df.sort_values("created_at").reset_index(drop=True)
+    split_idx = int(len(df_sorted) * (1 - test_fraction))
+    train = df_sorted.iloc[:split_idx]
+    test = df_sorted.iloc[split_idx:]
+    logger.info(f"  Temporal split: train {len(train)} (before {train['created_at'].max()}), "
+                f"test {len(test)} (after {test['created_at'].min()})")
+    return train, test
+
+
 def main():
     logger.info("=" * 60)
-    logger.info("PredictiveCare ML Training Pipeline v3.1 (Leakage-Free)")
+    logger.info("PredictiveCare ML Training Pipeline v3.2 (Temporal Split)")
     logger.info("=" * 60)
 
     df = build_feature_matrix()
     df.columns = [c.lower() for c in df.columns]
     fc = [c.lower() for c in FEATURE_COLS]
-    X = df[fc].fillna(0)
+
+    train_df, test_df = temporal_split(df)
+    X_train = train_df[fc].fillna(0)
+    X_test = test_df[fc].fillna(0)
 
     models = {}
     all_metrics = {}
 
-    for target in ["er_visit_30d", "care_need_90d"]:
-        y = df[target].astype(int)
+    for target in ["er_visit_30d", "care_need_90d", "care_need_30d"]:
+        y_train = train_df[target].astype(int)
+        y_test = test_df[target].astype(int)
         logger.info(f"\n{'='*40}")
-        logger.info(f"Target: {target} — positive rate: {y.mean():.4f} ({y.sum()}/{len(y)})")
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
+        logger.info(f"Target: {target} — train pos rate: {y_train.mean():.4f}, test pos rate: {y_test.mean():.4f}")
 
         result = train_model(X_train, X_test, y_train, y_test, target)
         if result:
