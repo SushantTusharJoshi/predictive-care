@@ -1,4 +1,5 @@
 """Authentication, RBAC, and JWT token management for PredictiveCare v3.1."""
+import logging
 from datetime import datetime, timedelta
 
 from fastapi import Header, HTTPException
@@ -6,6 +7,8 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -15,6 +18,15 @@ JWT_EXPIRE_HOURS = settings.jwt_expire_hours
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+_DEFAULT_CREDENTIALS = {
+    "admin": "admin",
+    "physician": "physician",
+    "dr.patel": "dr.patel",
+    "nurse": "nurse",
+    "rn.williams": "rn.williams",
+    "coordinator": "coordinator",
+}
+
 USERS = {
     "admin": {"password": pwd_ctx.hash("admin"), "role": "admin", "name": "System Admin"},
     "physician": {"password": pwd_ctx.hash("physician"), "role": "physician", "name": "Dr. General"},
@@ -23,6 +35,26 @@ USERS = {
     "rn.williams": {"password": pwd_ctx.hash("rn.williams"), "role": "nurse", "name": "RN Sarah Williams"},
     "coordinator": {"password": pwd_ctx.hash("coordinator"), "role": "coordinator", "name": "Care Coordinator"},
 }
+
+
+def check_default_credentials():
+    """Log warnings if default credentials or JWT secret are still in use."""
+    default_users = [
+        name for name, pwd in _DEFAULT_CREDENTIALS.items()
+        if name in USERS and pwd_ctx.verify(pwd, USERS[name]["password"])
+    ]
+    if default_users:
+        logger.warning(
+            "DEFAULT CREDENTIALS DETECTED for users: %s. "
+            "Change passwords before deploying to production.",
+            ", ".join(default_users),
+        )
+
+    if JWT_SECRET == "dev-secret-change-in-prod":
+        logger.warning(
+            "JWT_SECRET is set to the default value. "
+            "Set a strong secret via the JWT_SECRET environment variable.",
+        )
 
 ROLE_PERMISSIONS = {
     "admin": ["view_patients", "view_predictions", "view_admin", "view_alerts",

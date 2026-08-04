@@ -1,7 +1,14 @@
 """Tests for authentication and RBAC."""
 import pytest
 
-from app.services.auth import _extract_user, authenticate, create_token, has_permission, verify_token
+from app.services.auth import (
+    _extract_user,
+    authenticate,
+    check_default_credentials,
+    create_token,
+    has_permission,
+    verify_token,
+)
 
 
 class TestAuthenticate:
@@ -78,3 +85,15 @@ class TestExtractUser:
         user = _extract_user(f"Bearer {token}")
         assert user["username"] == "admin"
         assert user["role"] == "admin"
+
+
+class TestDefaultCredentialWarning:
+    def test_warns_on_default_credentials(self, caplog):
+        with caplog.at_level("WARNING"):
+            check_default_credentials()
+        assert "DEFAULT CREDENTIALS DETECTED" in caplog.text
+
+    def test_warns_on_default_jwt_secret(self, caplog):
+        with caplog.at_level("WARNING"):
+            check_default_credentials()
+        assert "JWT_SECRET" in caplog.text

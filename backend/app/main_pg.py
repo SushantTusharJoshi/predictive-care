@@ -33,7 +33,7 @@ from app.data.database_pg import (
     search_patients,
 )
 from app.middleware.hipaa import HipaaAuditMiddleware
-from app.services.auth import authenticate, create_token, require_role
+from app.services.auth import authenticate, check_default_credentials, create_token, require_role
 from app.services.create_patient import create_patient
 from app.services.groq_narratives import generate_longitudinal_narrative, generate_shap_narrative
 from app.services.reminders import (
@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
     await init_db()
     load_models()
+    check_default_credentials()
     logger.info("PredictiveCare v3.1 started")
     yield
     await close_db()
