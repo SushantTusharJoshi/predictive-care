@@ -6,7 +6,7 @@ import logging
 import os
 import pickle
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -108,7 +108,7 @@ app.add_middleware(CORSMiddleware, **cors_kwargs)
 @app.get("/health")
 async def health():
     return {"status": "healthy", "version": "3.1.0", "models_loaded": len(MODELS) > 0,
-            "hipaa_audit": True, "timestamp": datetime.now(timezone.utc).isoformat()}
+            "hipaa_audit": True, "timestamp": datetime.now(UTC).isoformat()}
 
 
 # ━━━ Auth ━━━

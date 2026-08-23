@@ -1,4 +1,6 @@
 """Tests for authentication and RBAC."""
+from unittest.mock import patch
+
 import pytest
 
 from app.services.auth import (
@@ -94,6 +96,6 @@ class TestDefaultCredentialWarning:
         assert "DEFAULT CREDENTIALS DETECTED" in caplog.text
 
     def test_warns_on_default_jwt_secret(self, caplog):
-        with caplog.at_level("WARNING"):
+        with patch("app.services.auth.JWT_SECRET", "dev-secret-change-in-prod"), caplog.at_level("WARNING"):
             check_default_credentials()
         assert "JWT_SECRET" in caplog.text

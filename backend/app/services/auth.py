@@ -1,6 +1,6 @@
 """Authentication, RBAC, and JWT token management for PredictiveCare v3.1."""
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Header, HTTPException
 from jose import JWTError, jwt
@@ -83,8 +83,8 @@ def create_token(user: dict) -> str:
         "sub": user["username"],
         "role": user["role"],
         "name": user["name"],
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
-        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(UTC) + timedelta(hours=JWT_EXPIRE_HOURS),
+        "iat": datetime.now(UTC),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 

@@ -502,7 +502,7 @@ async def create_scheduling_recommendation(patient_id: str, prediction_type: str
 async def action_scheduling_recommendation(rec_id: str, action: str, clinician: str,
                                             reason: str = "") -> dict:
     async with get_session() as session:
-        from datetime import datetime, timezone
+        from datetime import UTC, datetime
         result = await session.execute(
             select(SchedulingRecommendation)
             .where(SchedulingRecommendation.recommendation_id == uuid_mod.UUID(rec_id)))
@@ -511,7 +511,7 @@ async def action_scheduling_recommendation(rec_id: str, action: str, clinician: 
             return {"error": "Recommendation not found"}
         rec.status = action
         rec.actioned_by = clinician
-        rec.actioned_at = datetime.now(timezone.utc)
+        rec.actioned_at = datetime.now(UTC)
         rec.modification_reason = reason
         return {"recommendation_id": str(rec.recommendation_id), "status": action}
 
