@@ -1,13 +1,13 @@
 """Audit logging service for HIPAA compliance."""
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 
 AUDIT_LOG = deque(maxlen=10000)
 
 
 def log_event(user: str, role: str, action: str, resource: str, details: str = ""):
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "user": user,
         "role": role,
         "action": action,

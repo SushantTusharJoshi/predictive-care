@@ -38,6 +38,16 @@ FEATURE_COLS = [
 # NOTE: archetype columns removed — they leak into care_need labels
 # NOTE: er_visits_1y removed — it leaks into er_visit_30d label
 
+# Columns known to leak label information — must never appear in FEATURE_COLS
+LEAKY_FEATURES = {
+    "er_visits_1y", "er_visit_30d", "care_need_90d", "care_need_30d",
+    "arch_excellent", "arch_good", "arch_moderate", "arch_poor", "arch_erratic",
+    "adherence_archetype",
+}
+_leaked = LEAKY_FEATURES & {c.lower() for c in FEATURE_COLS}
+if _leaked:
+    raise RuntimeError(f"Feature leakage detected: {_leaked} found in FEATURE_COLS")
+
 
 def build_feature_matrix():
     """Build feature matrix + labels from PostgreSQL.

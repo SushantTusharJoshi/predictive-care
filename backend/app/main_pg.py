@@ -6,7 +6,7 @@ import logging
 import os
 import pickle
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -97,17 +97,18 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(HipaaAuditMiddleware)
 
 origins = ["http://localhost:3000", "http://127.0.0.1:3000", settings.frontend_url]
-if settings.environment == "production":
-    origins.append("https://*.vercel.app")
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True,
+cors_kwargs = dict(allow_origins=origins, allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
+if settings.environment == "production":
+    cors_kwargs["allow_origin_regex"] = r"https://.*\.vercel\.app"
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 
 # ━━━ Health ━━━
 @app.get("/health")
 async def health():
     return {"status": "healthy", "version": "3.1.0", "models_loaded": len(MODELS) > 0,
-            "hipaa_audit": True, "timestamp": datetime.utcnow().isoformat()}
+            "hipaa_audit": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 # ━━━ Auth ━━━
@@ -447,7 +448,8 @@ def _predict(features: dict) -> dict:
             if not model: continue
             row = pd.DataFrame([{c: features.get(c, features.get(c.lower(), 0)) for c in fc}])
             scores[name] = round(float(model.predict_proba(row)[0, 1]), 4)
-        except Exception: pass
+        except Exception as e:
+            logger.warning("Prediction failed for %s: %s", name, e)
     return scores
 
 
