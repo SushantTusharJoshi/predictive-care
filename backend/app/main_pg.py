@@ -193,14 +193,15 @@ async def patient_detail(request: Request, patient_id: str,
     detail = await get_patient_detail(patient_id)
     if not detail:
         raise HTTPException(404, "Patient not found")
-    if MODELS and FEATURE_COLS:
-        try:
-            features = await get_patient_features(patient_id)
-            detail["predictions"] = _predict_with_shap(features) if features else {"error": "No features"}
-        except Exception as e:
-            detail["predictions"] = {"error": str(e)}
-    else:
-        detail["predictions"] = {"error": "Models not loaded — run: python -m app.ml.train_pg"}
+    if user["role"] in ("admin", "physician"):
+        if MODELS and FEATURE_COLS:
+            try:
+                features = await get_patient_features(patient_id)
+                detail["predictions"] = _predict_with_shap(features) if features else {"error": "No features"}
+            except Exception as e:
+                detail["predictions"] = {"error": str(e)}
+        else:
+            detail["predictions"] = {"error": "Models not loaded — run: python -m app.ml.train_pg"}
     await log_audit(user["username"], user["role"], "view_patient", patient_id, patient_id=patient_id)
     return detail
 

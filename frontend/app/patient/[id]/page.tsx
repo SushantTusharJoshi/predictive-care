@@ -2,7 +2,7 @@
 import { useState, useEffect, use } from 'react';
 import { useRouter } from 'next/navigation';
 import Nav from '../../../components/Nav';
-import { api } from '../../../lib/api';
+import { api, getRole } from '../../../lib/api';
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, BarChart, Bar, Legend, AreaChart, Area } from 'recharts';
 
 export default function PatientDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -34,13 +34,16 @@ export default function PatientDetailPage({ params }: { params: Promise<{ id: st
     api(`/patients/${id}/shap-narrative/${predType}`).then(setNarrative).catch(() => setNarrative({ error: 'Failed' }));
   };
 
+  const role = getRole();
+  const canViewPredictions = role === 'admin' || role === 'physician';
+
   const tabs = [
     { key: 'overview', label: 'Overview' },
-    { key: 'predictions', label: 'Risk Predictions' },
+    ...(canViewPredictions ? [{ key: 'predictions', label: 'Risk Predictions' }] : []),
     { key: 'adherence', label: 'Adherence' },
     { key: 'reminders', label: 'Med Reminders', onSelect: loadReminders },
-    { key: 'longitudinal', label: '5-Year Analysis', onSelect: loadLongitudinal },
-    { key: 'similar', label: 'Similar Patients', onSelect: loadSimilar },
+    ...(canViewPredictions ? [{ key: 'longitudinal', label: '5-Year Analysis', onSelect: loadLongitudinal }] : []),
+    ...(canViewPredictions ? [{ key: 'similar', label: 'Similar Patients', onSelect: loadSimilar }] : []),
     { key: 'labs', label: 'Labs & Vitals' },
   ];
 
