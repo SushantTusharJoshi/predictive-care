@@ -1,10 +1,13 @@
 """Centralized configuration via environment variables."""
 from functools import lru_cache
 
+from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
+
     database_url: str = "postgresql+asyncpg://pc_user:pc_local_dev_2024@localhost:5432/predictive_care"
     database_url_sync: str = "postgresql://pc_user:pc_local_dev_2024@localhost:5432/predictive_care"
     db_pool_size: int = 20
@@ -20,10 +23,6 @@ class Settings(BaseSettings):
     model_dir: str = "data/models"
     hipaa_audit_enabled: bool = True
     session_timeout_minutes: int = 30
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 @lru_cache
