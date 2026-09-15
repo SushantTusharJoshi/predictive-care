@@ -332,6 +332,12 @@ async def shap_narrative(request: Request, patient_id: str, prediction_type: str
     user=Depends(require_role(["admin", "physician"]))):
     detail = await get_patient_detail(patient_id)
     if not detail: raise HTTPException(404, "Patient not found")
+    if not MODELS or not FEATURE_COLS:
+        raise HTTPException(503, "Models not loaded")
+    features = await get_patient_features(patient_id)
+    if not features:
+        raise HTTPException(404, "No features for patient")
+    detail["predictions"] = _predict_with_shap(features)
     pred_info = detail.get("predictions", {}).get(prediction_type)
     if not pred_info or isinstance(pred_info, str): raise HTTPException(404, f"No prediction for {prediction_type}")
     narrative = await generate_shap_narrative(detail, pred_info, prediction_type)
