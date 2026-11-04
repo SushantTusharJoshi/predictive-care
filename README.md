@@ -29,10 +29,10 @@ The core insight: **risk prediction is useless without trust-weighted action**. 
 ## ML Architecture
 
 ### Ensemble Models
-- **XGBoost + LightGBM** ensemble trained on 50K Synthea-based synthetic patient cohorts
+- **XGBoost + LightGBM** ensemble trained on a 50K-patient random sample drawn from a 100K-patient Synthea-based synthetic cohort
 - **True temporal train/test split**: oldest 80% of patients train the model, newest 20% are held out for evaluation — no future data leaks into training (an earlier version used random splits and hit AUC=1.0 due to data leakage; this was caught and corrected)
 
-### Prediction Horizons (Temporal Split, 50K Patients)
+### Prediction Horizons (Temporal Split, 50K-Patient Training Sample)
 | Model | AUC | Precision | Recall | F1 | Algorithm | Notes |
 |---|---|---|---|---|---|---|
 | ER Visit (30d) | 0.74 | 0.49 | 0.64 | 0.56 | LightGBM | Primary triage signal |
@@ -56,7 +56,8 @@ Every prediction surfaces per-patient feature attribution via SHAP values. The G
 
 ## Data Scale
 
-- **215M+ adherence events** generated across synthetic patient cohorts
+- **100K synthetic patients** with 5 years of longitudinal data
+- **215M+ adherence events** generated across the synthetic cohort
 - PostgreSQL 16 with async SQLAlchemy ORM and indexed lookups
 - Risk scores pre-computed at startup; no per-request ML inference on patient lists (eliminates timeout risk)
 
