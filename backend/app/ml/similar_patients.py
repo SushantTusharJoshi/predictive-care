@@ -159,9 +159,8 @@ def find_similar_patients(patient_id: str, k: int = 10, knn_data=None) -> list:
         _patient_ids = knn_data["patient_ids"]
         _label_encoders = knn_data["label_encoders"]
         _patient_info = knn_data.get("patient_info", {})
-    elif _knn_model is None:
-        if not load_knn_index():
-            return []
+    elif _knn_model is None and not load_knn_index():
+        return []
 
     # Get patient info
     info = _patient_info.get(patient_id)
