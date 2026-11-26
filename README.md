@@ -138,7 +138,12 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000)
 
-### Default Logins
+### Demo Logins
+Demo accounts use the username as the password and exist only when demo logins are on. They are on by default outside production. In production (`ENVIRONMENT=production`) they are off, and the backend refuses to start while any password-equals-username account or the default `JWT_SECRET` is active.
+
+- Real accounts: set `AUTH_USERS` to a JSON object of bcrypt hashes, for example `{"dr.kim": {"password_hash": "$2b$12$...", "role": "physician", "name": "Dr. Kim"}}`. Generate a hash with `python -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('your-password'))"`.
+- Public synthetic-data demo: set `DEMO_LOGINS=true` explicitly. Hide the quick-login buttons with `NEXT_PUBLIC_DEMO_LOGINS=false` on the frontend.
+
 | Username | Password | Role |
 |---|---|---|
 | admin | admin | Admin |

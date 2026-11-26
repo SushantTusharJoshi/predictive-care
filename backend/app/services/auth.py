@@ -1,4 +1,5 @@
 """Authentication, RBAC, and JWT token management for PredictiveCare v3.1."""
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -18,39 +19,58 @@ JWT_EXPIRE_HOURS = settings.jwt_expire_hours
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-_DEFAULT_CREDENTIALS = {
-    "admin": "admin",
-    "physician": "physician",
-    "dr.patel": "dr.patel",
-    "nurse": "nurse",
-    "rn.williams": "rn.williams",
-    "coordinator": "coordinator",
-}
-
-USERS = {
-    "admin": {"password": pwd_ctx.hash("admin"), "role": "admin", "name": "System Admin"},
-    "physician": {"password": pwd_ctx.hash("physician"), "role": "physician", "name": "Dr. General"},
-    "dr.patel": {"password": pwd_ctx.hash("dr.patel"), "role": "physician", "name": "Dr. Anita Patel"},
-    "nurse": {"password": pwd_ctx.hash("nurse"), "role": "nurse", "name": "RN Williams"},
-    "rn.williams": {"password": pwd_ctx.hash("rn.williams"), "role": "nurse", "name": "RN Sarah Williams"},
-    "coordinator": {"password": pwd_ctx.hash("coordinator"), "role": "coordinator", "name": "Care Coordinator"},
+_DEMO_ACCOUNTS = {
+    "admin": ("admin", "System Admin"),
+    "physician": ("physician", "Dr. General"),
+    "dr.patel": ("physician", "Dr. Anita Patel"),
+    "nurse": ("nurse", "RN Williams"),
+    "rn.williams": ("nurse", "RN Sarah Williams"),
+    "coordinator": ("coordinator", "Care Coordinator"),
 }
 
 
-def check_default_credentials():
-    """Log warnings if default credentials or JWT secret are still in use."""
-    default_users = [
-        name for name, pwd in _DEFAULT_CREDENTIALS.items()
-        if name in USERS and pwd_ctx.verify(pwd, USERS[name]["password"])
-    ]
-    if default_users:
-        logger.warning(
-            "DEFAULT CREDENTIALS DETECTED for users: %s. "
-            "Change passwords before deploying to production.",
-            ", ".join(default_users),
+def demo_logins_enabled(cfg=settings) -> bool:
+    if cfg.demo_logins is not None:
+        return cfg.demo_logins
+    return cfg.environment != "production"
+
+
+def build_users(cfg=settings) -> dict:
+    """Users from AUTH_USERS (bcrypt hashes), plus demo accounts when demo logins are on."""
+    users = {}
+    if demo_logins_enabled(cfg):
+        for username, (role, name) in _DEMO_ACCOUNTS.items():
+            users[username] = {"password": pwd_ctx.hash(username), "role": role, "name": name}
+    if cfg.auth_users:
+        for username, info in json.loads(cfg.auth_users).items():
+            if info["role"] not in ROLE_PERMISSIONS:
+                raise ValueError(f"AUTH_USERS: unknown role '{info['role']}' for '{username}'")
+            users[username] = {"password": info["password_hash"], "role": info["role"],
+                               "name": info.get("name", username)}
+    return users
+
+
+def default_password_users(users: dict) -> list[str]:
+    return [u for u in users if pwd_ctx.verify(u, users[u]["password"])]
+
+
+def check_default_credentials(cfg=settings, users=None):
+    """Refuse to run production with password=username accounts unless demo logins are opted in."""
+    users = USERS if users is None else users
+    defaults = default_password_users(users)
+    if defaults and cfg.environment == "production" and cfg.demo_logins is not True:
+        raise RuntimeError(
+            f"Accounts with password equal to username in production: {', '.join(defaults)}. "
+            "Set AUTH_USERS with bcrypt hashes, or set DEMO_LOGINS=true for a public synthetic-data demo."
         )
+    if defaults:
+        logger.warning("Demo logins active (password = username): %s", ", ".join(defaults))
+    if not users:
+        logger.warning("No users configured. Set AUTH_USERS or DEMO_LOGINS=true.")
 
     if JWT_SECRET == "dev-secret-change-in-prod":
+        if cfg.environment == "production":
+            raise RuntimeError("JWT_SECRET is the default value. Set a strong secret before running in production.")
         logger.warning(
             "JWT_SECRET is set to the default value. "
             "Set a strong secret via the JWT_SECRET environment variable.",
@@ -67,6 +87,8 @@ ROLE_PERMISSIONS = {
     "coordinator": ["view_patients", "view_alerts", "view_scheduling",
                     "approve_recommendations", "view_adherence", "view_reminders"],
 }
+
+USERS = build_users()
 
 
 def authenticate(username: str, password: str) -> dict | None:

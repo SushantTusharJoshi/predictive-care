@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     frontend_url: str = "http://localhost:3000"
     environment: str = "development"
+    # Demo accounts (password = username). Unset means on everywhere except production.
+    demo_logins: bool | None = None
+    # JSON object: {"username": {"password_hash": "<bcrypt>", "role": "admin", "name": "..."}}
+    auth_users: str = ""
     log_level: str = "info"
     rate_limit_per_minute: int = 60
     model_dir: str = "data/models"
