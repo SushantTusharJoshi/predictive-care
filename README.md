@@ -50,7 +50,7 @@ The core insight: **risk prediction is useless without trust-weighted action**. 
 5. Adherence rate (90-day)
 
 ### SHAP Explainability
-Every prediction surfaces per-patient feature attribution via SHAP values. The Groq LLM (`llama-3.1-70b-versatile`) converts SHAP output into plain-English clinical narratives — after PHI de-identification.
+Every prediction surfaces per-patient feature attribution via SHAP values. The Groq-hosted LLM (default `openai/gpt-oss-120b`, set with `GROQ_MODEL`) converts SHAP output into plain-English clinical narratives — after PHI de-identification.
 
 ---
 
@@ -92,7 +92,7 @@ Trust score drives reminder dispatch tier:
 | Backend | FastAPI 0.115, Python 3.12, SQLAlchemy async |
 | Database | PostgreSQL 16 (Homebrew / Docker) |
 | ML | XGBoost, LightGBM, scikit-learn, SHAP |
-| LLM | Groq API (llama-3.1-70b-versatile) |
+| LLM | Groq API (`openai/gpt-oss-120b` by default, `GROQ_MODEL` to change) |
 | Frontend | Next.js 15, React 19, Recharts, Tailwind CSS |
 | Auth | JWT RBAC |
 | CI/CD | GitHub Actions, weekly model retraining |

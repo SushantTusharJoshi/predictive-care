@@ -1,16 +1,46 @@
-"""Groq API integration for SHAP narrative generation — v3.1.
-Uses Llama 3.1 70B. De-identifies PHI before any external API call.
+"""Groq API integration for SHAP narrative generation.
+Model is set by GROQ_MODEL. De-identifies PHI before any external API call.
 """
 import json
+import logging
 import os
 
 import httpx
 
 from app.middleware.hipaa import de_identify_for_llm
 
+logger = logging.getLogger(__name__)
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.1-70b-versatile"
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+
+def _groq_payload(prompt: str, max_tokens: int) -> dict:
+    payload = {"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+               "max_tokens": max_tokens, "temperature": 0.3}
+    # gpt-oss models reason before answering; reasoning tokens count toward max_tokens
+    if "gpt-oss" in GROQ_MODEL:
+        payload["reasoning_effort"] = "low"
+    return payload
+
+
+async def _call_groq(prompt: str, max_tokens: int) -> str | None:
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json=_groq_payload(prompt, max_tokens),
+            )
+        if resp.status_code != 200:
+            logger.warning("Groq returned %s for model %s; using fallback narrative", resp.status_code, GROQ_MODEL)
+            return None
+        content = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        return content or None
+    except Exception as e:
+        logger.warning("Groq call failed (%s); using fallback narrative", type(e).__name__)
+        return None
 
 
 async def generate_shap_narrative(
@@ -52,19 +82,7 @@ Write 3-4 sentences explaining:
 
 Keep it under 150 words. No headers or bullet points."""
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                GROQ_URL,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 300, "temperature": 0.3},
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"Groq API error: {e}")
-    return _fallback_narrative(prediction_type, probability, top_features)
+    return await _call_groq(prompt, 1000) or _fallback_narrative(prediction_type, probability, top_features)
 
 
 def _fallback_narrative(prediction_type: str, probability: float, top_features: list) -> str:
@@ -107,19 +125,7 @@ async def generate_longitudinal_narrative(patient_detail: dict, trend_data: dict
 Write 3-4 sentences: Is the patient improving, stable, or declining? What clinical actions are warranted?
 Under 120 words, no headers."""
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                GROQ_URL,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 250, "temperature": 0.3},
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception:
-        pass
-    return _fallback_longitudinal(trend_data)
+    return await _call_groq(prompt, 800) or _fallback_longitudinal(trend_data)
 
 
 def _fallback_longitudinal(trend_data: dict) -> str:
