@@ -10,9 +10,13 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // suppressHydrationWarning covers only the attributes of <html> and <body> themselves
+  // (it is one level deep). Browser extensions such as Grammarly, Dark Reader and
+  // password managers write attributes onto these two elements before React hydrates,
+  // which React reports as a hydration mismatch. Everything inside still hydrates strictly.
   return (
-    <html lang="en">
-      <body className={inter.className}>{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <body className={inter.className} suppressHydrationWarning>{children}</body>
     </html>
   );
 }
