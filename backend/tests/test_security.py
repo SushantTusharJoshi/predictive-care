@@ -70,7 +70,7 @@ class TestRealAccountsKeepPermissions:
     def test_real_admin_reads_audit_log(self, client):
         users = self._real_admin()
         with patch.object(auth, "USERS", users), \
-                patch("app.main_pg.get_audit_log", new=AsyncMock(return_value=[])):
+                patch("app.main.get_audit_log", new=AsyncMock(return_value=[])):
             resp = client.post("/auth/login", json={"username": "ops.admin", "password": "long-pass-1"})
             assert resp.json()["demo"] is False
             audit = client.get("/audit", headers=auth_header(resp.json()["token"]))
@@ -115,10 +115,10 @@ class TestInsuranceType:
 
 class TestGenericErrors:
     def test_unhandled_error_body_is_generic(self, client):
-        from app.main_pg import app
+        from app.main import app
         token = _login(client, "admin")["token"]
         boom = AsyncMock(side_effect=RuntimeError("password=hunter2 host=db.internal"))
-        with patch("app.main_pg.get_dashboard_stats", new=boom), patch("app.main_pg.log_audit", new=AsyncMock()):
+        with patch("app.main.get_dashboard_stats", new=boom), patch("app.main.log_audit", new=AsyncMock()):
             raw = TestClient(app, raise_server_exceptions=False)
             resp = raw.get("/stats", headers=auth_header(token))
         assert resp.status_code == 500
@@ -132,11 +132,11 @@ class TestCors:
                                   "environment": "production", **kw})
 
     def test_production_allows_only_configured_frontend(self):
-        from app.main_pg import cors_origins
+        from app.main import cors_origins
         assert cors_origins(self._cfg()) == ["https://predictive-care.vercel.app"]
 
     def test_comma_separated_list_and_trailing_slash(self):
-        from app.main_pg import cors_origins
+        from app.main import cors_origins
         cfg = self._cfg(frontend_url="https://a.vercel.app/, https://b.example.com")
         assert cors_origins(cfg) == ["https://a.vercel.app", "https://b.example.com"]
 

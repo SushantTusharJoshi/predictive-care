@@ -1,2 +1,0 @@
-# Kept for old scripts; the single source of pins is requirements.txt.
--r requirements.txt

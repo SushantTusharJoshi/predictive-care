@@ -8,7 +8,7 @@ setup: ## First-time setup: start DB, install deps, create tables
 	docker compose up -d db
 	@echo "Waiting for PostgreSQL..."
 	@sleep 5
-	cd backend && pip install -r requirements-pg.txt
+	cd backend && pip install -r requirements.txt
 	cd frontend && npm install
 	@echo "Creating database tables..."
 	cd backend && python -c "from app.data.database_pg import get_sync_engine; from app.data.models_pg import Base; Base.metadata.create_all(get_sync_engine()); print('Done.')"
@@ -17,13 +17,13 @@ setup: ## First-time setup: start DB, install deps, create tables
 dev: ## Start backend + frontend
 	docker compose up -d db
 	@sleep 3
-	cd backend && uvicorn app.main_pg:app --reload --port 8000 &
+	cd backend && uvicorn app.main:app --reload --port 8000 &
 	cd frontend && npm run dev &
 	@echo "\n🚀 Backend: http://localhost:8000  Frontend: http://localhost:3000"
 
 down: ## Stop all services
 	docker compose down
-	@pkill -f "uvicorn app.main_pg" 2>/dev/null || true
+	@pkill -f "uvicorn app.main" 2>/dev/null || true
 	@pkill -f "next dev" 2>/dev/null || true
 
 ingest-fallback: ## Generate 100K synthetic patients (no Synthea/Java needed)

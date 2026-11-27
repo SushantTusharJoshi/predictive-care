@@ -1,6 +1,6 @@
 """PC-N2: every route that reads patient data writes an audit_log row.
 
-A static check over main_pg.py: any route whose path touches patients,
+A static check over main.py: any route whose path touches patients,
 search or stats must call log_audit in its body. New routes are covered
 automatically, so a forgotten audit call fails CI.
 """
@@ -8,7 +8,7 @@ automatically, so a forgotten audit call fails CI.
 import ast
 from pathlib import Path
 
-MAIN = Path(__file__).resolve().parents[1] / "app" / "main_pg.py"
+MAIN = Path(__file__).resolve().parents[1] / "app" / "main.py"
 PHI_MARKERS = ("/patients", "/search", "/stats", "/predict")
 
 

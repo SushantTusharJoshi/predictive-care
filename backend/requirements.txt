@@ -30,8 +30,3 @@ scikit-learn==1.9.1
 xgboost==3.4.1
 lightgbm==4.7.0
 shap==0.54.1
-
-# Legacy, removed with the SQLite path
-groq==1.7.0
-aiofiles==25.1.0
-aiosqlite==0.22.1
