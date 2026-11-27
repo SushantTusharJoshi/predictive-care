@@ -30,7 +30,7 @@ Intended use: a portfolio demo of a time-honest training pipeline, calibration, 
 
 ## Results of the deployed demo run
 
-Command: `DATABASE_URL_SYNC=postgresql://pc_user@127.0.0.1:55433/predictive_care python -m app.ml.train --label "demo: 600 synthetic patients (ingest_synthea --fallback)"`, run on 2026-11-27 against a throwaway 600-patient database. Full output: [metrics/postgres-demo-600.json](metrics/postgres-demo-600.json). Tables printed by `python -m app.ml.report docs/metrics/postgres-demo-600.json`.
+Command: `DATABASE_URL_SYNC=postgresql://pc_user@127.0.0.1:55433/predictive_care python -m app.ml.train --label "demo: 600 synthetic patients (ingest_synthea --fallback)"`, run on 2026-11-27 against a throwaway 600-patient database (rerun with the fairness report added; every metric was identical to the first run, version `20261127T180858Z-2b2ebb2`). Full output: [metrics/postgres-demo-600.json](metrics/postgres-demo-600.json). Tables printed by `python -m app.ml.report docs/metrics/postgres-demo-600.json`.
 
 Split: train 420 patients (first encounter 2021-11-28 to 2022-04-10), calibration 60 (2022-04-12 to 2022-05-24), test 120 (2022-05-25 to 2024-08-30). Index date 2026-08-29.
 
@@ -60,6 +60,21 @@ Command: `python -m app.ml.train --source memory --n 20000 --label "demo: in-mem
 
 The logistic baseline wins here because the simulated outcome is itself logistic; XGBoost and LightGBM land 0.004 to 0.012 ROC-AUC below it (see the json). This is a check of the code, not evidence about real patients.
 
+## Fairness by adherence archetype (test slice)
+
+The same run reports, per archetype, the observed and mean predicted rate, the share flagged at the chosen
+threshold, recall, false positive rate and ROC-AUC (`targets.<target>.fairness` in the json; shown on the admin
+page). A group needs 5 positives and 5 negatives before its rates are compared.
+
+| Target | Groups with enough cases | What they show |
+|---|---|---|
+| care_need_90d | good (38 patients, 7 positives), moderate (35, 5) | recall 0.43 vs 0.60, false positive rate 0.58 vs 0.27 |
+| er_visit_30d | none (2 positives in the whole test slice) | nothing to compare |
+| care_need_30d | none (5 positives) | nothing to compare |
+
+With this few cases the care_need_90d gap is within noise; the report is wired up, the evidence is not there yet.
+Archetype is not a model input (it is excluded as leaky); it is only the grouping. Race and sex groups are not reported yet.
+
 ## Explanations
 
 - Each prediction returns its top 8 features by absolute SHAP value. Trees use exact TreeSHAP (the libraries' native contribution output, checked against `shap.TreeExplainer` in the tests); the baseline uses linear SHAP with the training mean as background; the ensemble averages its members.
@@ -70,6 +85,6 @@ The logistic baseline wins here because the simulated outcome is itself logistic
 
 - Synthetic data only; no external or prospective validation; not clinically validated.
 - The 600-patient demo is too small for stable metrics, and its generator has no feature-outcome link.
-- Fairness across groups has not been evaluated in this run.
+- Fairness is reported by archetype only, and the demo has too few cases per group to compare.
 - Attribution is not causation: a feature with a large SHAP value is not a treatment target.
 - Probabilities from targets without calibration (marked "no" above) should not be read as calibrated risks.

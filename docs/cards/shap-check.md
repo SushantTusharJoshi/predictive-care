@@ -29,7 +29,11 @@ flowchart TD
 
 - Before: the Groq text went straight to the page.
 - "Lower adherence" is a value, not a direction; only verbs (raises, lowers, reduces) count as a claim.
-- A clause that says both raises and lowers cannot be verified, so it fails rather than guessing.
+- A segment (a feature and the words up to the next feature) that says both raises and lowers cannot be verified,
+  so it fails rather than guessing.
+- The first live Groq run in CI (2026-11-27) wrote "X lowers the score, Y lowers the score, Z raises the score" in
+  one clause; reading direction per clause rejected two faithful narratives. Direction is now bound per feature
+  segment, and those three narratives are regression tests.
 
 ## Interviewer questions and how the code answers
 

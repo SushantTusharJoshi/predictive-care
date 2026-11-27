@@ -20,6 +20,7 @@ export default function Nav() {
     { href: '/dashboard', label: 'Dashboard' },
     { href: '/dashboard/patients', label: 'Patients' },
     { href: '/alerts', label: 'Alerts' },
+    ...(['admin', 'physician', 'coordinator'].includes(role) ? [{ href: '/approvals', label: 'Approvals' }] : []),
     ...(role === 'admin' ? [{ href: '/admin', label: 'Admin' }] : []),
   ];
 
