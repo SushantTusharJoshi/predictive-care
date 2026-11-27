@@ -1,0 +1,691 @@
+{
+  "version": "20261127T171546Z-db5430d",
+  "created_at": "2026-11-27T17:15:46.318427+00:00",
+  "label": "demo: in-memory synthetic sanity check",
+  "data": {
+    "source": "memory",
+    "patient_time": "synthetic enrolment date",
+    "n_requested": 20000,
+    "seed": 42,
+    "n_patients": 20000
+  },
+  "split": {
+    "method": "time-ordered by patient_time",
+    "fractions": [
+      0.7,
+      0.1,
+      0.2
+    ],
+    "train": {
+      "n": 14000,
+      "from": "2021-01-01",
+      "to": "2023-10-18"
+    },
+    "calibration": {
+      "n": 2000,
+      "from": "2023-10-18",
+      "to": "2024-03-13"
+    },
+    "test": {
+      "n": 4000,
+      "from": "2024-03-13",
+      "to": "2024-12-30"
+    }
+  },
+  "feature_cols": [
+    "age",
+    "gender_m",
+    "bmi",
+    "smoker",
+    "n_sdoh_risks",
+    "insurance_medicaid",
+    "insurance_medicare",
+    "insurance_private",
+    "insurance_uninsured",
+    "n_diagnoses",
+    "n_active_meds",
+    "adherence_rate_90d",
+    "adherence_rate_1y_ago",
+    "adherence_trend",
+    "avg_response_latency",
+    "avg_sbp",
+    "avg_hr"
+  ],
+  "targets": {
+    "er_visit_30d": {
+      "positive_rate": {
+        "train": 0.2331,
+        "calibration": 0.2475,
+        "test": 0.2465
+      },
+      "positives": {
+        "train": 3263,
+        "calibration": 495,
+        "test": 986
+      },
+      "candidates": {
+        "logreg": {
+          "calibration": {
+            "roc_auc": 0.7126,
+            "pr_auc": 0.4662,
+            "brier": 0.2161
+          },
+          "test": {
+            "roc_auc": 0.689,
+            "pr_auc": 0.4361,
+            "brier": 0.2202,
+            "threshold": 0.4939,
+            "precision": 0.3606,
+            "recall": 0.6268,
+            "f1": 0.4578
+          }
+        },
+        "xgboost": {
+          "calibration": {
+            "roc_auc": 0.6989,
+            "pr_auc": 0.442,
+            "brier": 0.2131
+          },
+          "test": {
+            "roc_auc": 0.6769,
+            "pr_auc": 0.41,
+            "brier": 0.2175,
+            "threshold": 0.4465,
+            "precision": 0.3419,
+            "recall": 0.6724,
+            "f1": 0.4533
+          }
+        },
+        "lightgbm": {
+          "calibration": {
+            "roc_auc": 0.6988,
+            "pr_auc": 0.4436,
+            "brier": 0.2126
+          },
+          "test": {
+            "roc_auc": 0.678,
+            "pr_auc": 0.4154,
+            "brier": 0.217,
+            "threshold": 0.4485,
+            "precision": 0.3474,
+            "recall": 0.6846,
+            "f1": 0.4609
+          }
+        },
+        "ensemble": {
+          "calibration": {
+            "roc_auc": 0.7001,
+            "pr_auc": 0.4446,
+            "brier": 0.2125
+          },
+          "test": {
+            "roc_auc": 0.6786,
+            "pr_auc": 0.4142,
+            "brier": 0.2169,
+            "threshold": 0.4575,
+            "precision": 0.3473,
+            "recall": 0.6542,
+            "f1": 0.4537
+          }
+        }
+      },
+      "selected": "logreg",
+      "selected_by": "ROC-AUC on the calibration slice",
+      "calibration": {
+        "status": "applied",
+        "method": "sigmoid",
+        "cv_brier": {
+          "isotonic": 0.16703,
+          "sigmoid": 0.1649
+        },
+        "uncalibrated_brier_on_calibration": 0.21615,
+        "chosen_on": "calibration slice (5-fold CV Brier)"
+      },
+      "threshold": {
+        "value": 0.2254,
+        "rule": "max F1",
+        "chosen_on": "calibration slice",
+        "valid": true
+      },
+      "test": {
+        "roc_auc": 0.689,
+        "pr_auc": 0.4361,
+        "brier": 0.1686,
+        "threshold": 0.2254,
+        "precision": 0.3478,
+        "recall": 0.6592,
+        "f1": 0.4553,
+        "f1_at_0_5": 0.2397,
+        "brier_uncalibrated": 0.2202,
+        "ece_uncalibrated": 0.2224,
+        "ece": 0.0141,
+        "reliability": [
+          {
+            "bin": "0.0-0.1",
+            "n": 499,
+            "mean_predicted": 0.0745,
+            "observed_rate": 0.0982
+          },
+          {
+            "bin": "0.1-0.2",
+            "n": 1337,
+            "mean_predicted": 0.1483,
+            "observed_rate": 0.1616
+          },
+          {
+            "bin": "0.2-0.3",
+            "n": 987,
+            "mean_predicted": 0.2463,
+            "observed_rate": 0.229
+          },
+          {
+            "bin": "0.3-0.4",
+            "n": 592,
+            "mean_predicted": 0.3463,
+            "observed_rate": 0.3378
+          },
+          {
+            "bin": "0.4-0.5",
+            "n": 328,
+            "mean_predicted": 0.4461,
+            "observed_rate": 0.4451
+          },
+          {
+            "bin": "0.5-0.6",
+            "n": 167,
+            "mean_predicted": 0.5474,
+            "observed_rate": 0.5389
+          },
+          {
+            "bin": "0.6-0.7",
+            "n": 67,
+            "mean_predicted": 0.6432,
+            "observed_rate": 0.6119
+          },
+          {
+            "bin": "0.7-0.8",
+            "n": 21,
+            "mean_predicted": 0.7436,
+            "observed_rate": 0.7619
+          },
+          {
+            "bin": "0.8-0.9",
+            "n": 2,
+            "mean_predicted": 0.8237,
+            "observed_rate": 1.0
+          }
+        ],
+        "calibrated_metrics_valid": true
+      },
+      "feature_importances": [
+        {
+          "feature": "age",
+          "mean_abs_shap": 0.3124
+        },
+        {
+          "feature": "n_diagnoses",
+          "mean_abs_shap": 0.2378
+        },
+        {
+          "feature": "smoker",
+          "mean_abs_shap": 0.2137
+        },
+        {
+          "feature": "adherence_rate_90d",
+          "mean_abs_shap": 0.186
+        },
+        {
+          "feature": "n_sdoh_risks",
+          "mean_abs_shap": 0.1812
+        },
+        {
+          "feature": "adherence_rate_1y_ago",
+          "mean_abs_shap": 0.1443
+        },
+        {
+          "feature": "adherence_trend",
+          "mean_abs_shap": 0.0634
+        },
+        {
+          "feature": "insurance_uninsured",
+          "mean_abs_shap": 0.0581
+        },
+        {
+          "feature": "insurance_private",
+          "mean_abs_shap": 0.0478
+        },
+        {
+          "feature": "bmi",
+          "mean_abs_shap": 0.0145
+        }
+      ]
+    },
+    "care_need_90d": {
+      "positive_rate": {
+        "train": 0.4306,
+        "calibration": 0.425,
+        "test": 0.4258
+      },
+      "positives": {
+        "train": 6028,
+        "calibration": 850,
+        "test": 1703
+      },
+      "candidates": {
+        "logreg": {
+          "calibration": {
+            "roc_auc": 0.7174,
+            "pr_auc": 0.6517,
+            "brier": 0.2152
+          },
+          "test": {
+            "roc_auc": 0.6908,
+            "pr_auc": 0.6258,
+            "brier": 0.2218,
+            "threshold": 0.3927,
+            "precision": 0.505,
+            "recall": 0.8326,
+            "f1": 0.6287
+          }
+        },
+        "xgboost": {
+          "calibration": {
+            "roc_auc": 0.7082,
+            "pr_auc": 0.647,
+            "brier": 0.2168
+          },
+          "test": {
+            "roc_auc": 0.6844,
+            "pr_auc": 0.6113,
+            "brier": 0.2233,
+            "threshold": 0.3994,
+            "precision": 0.511,
+            "recall": 0.8074,
+            "f1": 0.6259
+          }
+        },
+        "lightgbm": {
+          "calibration": {
+            "roc_auc": 0.7065,
+            "pr_auc": 0.6428,
+            "brier": 0.2172
+          },
+          "test": {
+            "roc_auc": 0.6866,
+            "pr_auc": 0.6157,
+            "brier": 0.2227,
+            "threshold": 0.4371,
+            "precision": 0.5328,
+            "recall": 0.734,
+            "f1": 0.6174
+          }
+        },
+        "ensemble": {
+          "calibration": {
+            "roc_auc": 0.7083,
+            "pr_auc": 0.6457,
+            "brier": 0.2168
+          },
+          "test": {
+            "roc_auc": 0.6861,
+            "pr_auc": 0.6145,
+            "brier": 0.2228,
+            "threshold": 0.3866,
+            "precision": 0.5047,
+            "recall": 0.8244,
+            "f1": 0.6261
+          }
+        }
+      },
+      "selected": "logreg",
+      "selected_by": "ROC-AUC on the calibration slice",
+      "calibration": {
+        "status": "applied",
+        "method": "sigmoid",
+        "cv_brier": {
+          "isotonic": 0.21178,
+          "sigmoid": 0.20957
+        },
+        "uncalibrated_brier_on_calibration": 0.21518,
+        "chosen_on": "calibration slice (5-fold CV Brier)"
+      },
+      "threshold": {
+        "value": 0.3009,
+        "rule": "max F1",
+        "chosen_on": "calibration slice",
+        "valid": true
+      },
+      "test": {
+        "roc_auc": 0.6908,
+        "pr_auc": 0.6258,
+        "brier": 0.2176,
+        "threshold": 0.3009,
+        "precision": 0.5052,
+        "recall": 0.8326,
+        "f1": 0.6288,
+        "f1_at_0_5": 0.5386,
+        "brier_uncalibrated": 0.2218,
+        "ece_uncalibrated": 0.066,
+        "ece": 0.0214,
+        "reliability": [
+          {
+            "bin": "0.0-0.1",
+            "n": 37,
+            "mean_predicted": 0.0845,
+            "observed_rate": 0.2162
+          },
+          {
+            "bin": "0.1-0.2",
+            "n": 415,
+            "mean_predicted": 0.1595,
+            "observed_rate": 0.1976
+          },
+          {
+            "bin": "0.2-0.3",
+            "n": 732,
+            "mean_predicted": 0.254,
+            "observed_rate": 0.2609
+          },
+          {
+            "bin": "0.3-0.4",
+            "n": 770,
+            "mean_predicted": 0.3482,
+            "observed_rate": 0.3792
+          },
+          {
+            "bin": "0.4-0.5",
+            "n": 730,
+            "mean_predicted": 0.4491,
+            "observed_rate": 0.4342
+          },
+          {
+            "bin": "0.5-0.6",
+            "n": 575,
+            "mean_predicted": 0.5484,
+            "observed_rate": 0.5304
+          },
+          {
+            "bin": "0.6-0.7",
+            "n": 400,
+            "mean_predicted": 0.6455,
+            "observed_rate": 0.6275
+          },
+          {
+            "bin": "0.7-0.8",
+            "n": 245,
+            "mean_predicted": 0.7427,
+            "observed_rate": 0.7184
+          },
+          {
+            "bin": "0.8-0.9",
+            "n": 87,
+            "mean_predicted": 0.8369,
+            "observed_rate": 0.8276
+          },
+          {
+            "bin": "0.9-1.0",
+            "n": 9,
+            "mean_predicted": 0.9134,
+            "observed_rate": 1.0
+          }
+        ],
+        "calibrated_metrics_valid": true
+      },
+      "feature_importances": [
+        {
+          "feature": "age",
+          "mean_abs_shap": 0.3189
+        },
+        {
+          "feature": "n_diagnoses",
+          "mean_abs_shap": 0.2453
+        },
+        {
+          "feature": "smoker",
+          "mean_abs_shap": 0.2098
+        },
+        {
+          "feature": "adherence_rate_90d",
+          "mean_abs_shap": 0.1791
+        },
+        {
+          "feature": "n_sdoh_risks",
+          "mean_abs_shap": 0.1477
+        },
+        {
+          "feature": "adherence_rate_1y_ago",
+          "mean_abs_shap": 0.1364
+        },
+        {
+          "feature": "insurance_uninsured",
+          "mean_abs_shap": 0.0723
+        },
+        {
+          "feature": "adherence_trend",
+          "mean_abs_shap": 0.066
+        },
+        {
+          "feature": "insurance_medicare",
+          "mean_abs_shap": 0.0343
+        },
+        {
+          "feature": "insurance_private",
+          "mean_abs_shap": 0.0243
+        }
+      ]
+    },
+    "care_need_30d": {
+      "positive_rate": {
+        "train": 0.2083,
+        "calibration": 0.198,
+        "test": 0.2005
+      },
+      "positives": {
+        "train": 2916,
+        "calibration": 396,
+        "test": 802
+      },
+      "candidates": {
+        "logreg": {
+          "calibration": {
+            "roc_auc": 0.7196,
+            "pr_auc": 0.4289,
+            "brier": 0.2163
+          },
+          "test": {
+            "roc_auc": 0.6951,
+            "pr_auc": 0.3775,
+            "brier": 0.2204,
+            "threshold": 0.5084,
+            "precision": 0.3224,
+            "recall": 0.6272,
+            "f1": 0.4259
+          }
+        },
+        "xgboost": {
+          "calibration": {
+            "roc_auc": 0.714,
+            "pr_auc": 0.4175,
+            "brier": 0.2074
+          },
+          "test": {
+            "roc_auc": 0.6835,
+            "pr_auc": 0.3583,
+            "brier": 0.2129,
+            "threshold": 0.5251,
+            "precision": 0.3352,
+            "recall": 0.5337,
+            "f1": 0.4117
+          }
+        },
+        "lightgbm": {
+          "calibration": {
+            "roc_auc": 0.7153,
+            "pr_auc": 0.4191,
+            "brier": 0.2084
+          },
+          "test": {
+            "roc_auc": 0.6847,
+            "pr_auc": 0.3564,
+            "brier": 0.2131,
+            "threshold": 0.5292,
+            "precision": 0.3378,
+            "recall": 0.5374,
+            "f1": 0.4148
+          }
+        },
+        "ensemble": {
+          "calibration": {
+            "roc_auc": 0.7162,
+            "pr_auc": 0.4209,
+            "brier": 0.2075
+          },
+          "test": {
+            "roc_auc": 0.6853,
+            "pr_auc": 0.3598,
+            "brier": 0.2126,
+            "threshold": 0.5438,
+            "precision": 0.3481,
+            "recall": 0.5012,
+            "f1": 0.4108
+          }
+        }
+      },
+      "selected": "logreg",
+      "selected_by": "ROC-AUC on the calibration slice",
+      "calibration": {
+        "status": "applied",
+        "method": "sigmoid",
+        "cv_brier": {
+          "isotonic": 0.14112,
+          "sigmoid": 0.13986
+        },
+        "uncalibrated_brier_on_calibration": 0.21632,
+        "chosen_on": "calibration slice (5-fold CV Brier)"
+      },
+      "threshold": {
+        "value": 0.2,
+        "rule": "max F1",
+        "chosen_on": "calibration slice",
+        "valid": true
+      },
+      "test": {
+        "roc_auc": 0.6951,
+        "pr_auc": 0.3775,
+        "brier": 0.1467,
+        "threshold": 0.2,
+        "precision": 0.3232,
+        "recall": 0.6259,
+        "f1": 0.4263,
+        "f1_at_0_5": 0.1667,
+        "brier_uncalibrated": 0.2204,
+        "ece_uncalibrated": 0.2656,
+        "ece": 0.0174,
+        "reliability": [
+          {
+            "bin": "0.0-0.1",
+            "n": 1022,
+            "mean_predicted": 0.0698,
+            "observed_rate": 0.0773
+          },
+          {
+            "bin": "0.1-0.2",
+            "n": 1425,
+            "mean_predicted": 0.146,
+            "observed_rate": 0.1551
+          },
+          {
+            "bin": "0.2-0.3",
+            "n": 821,
+            "mean_predicted": 0.2453,
+            "observed_rate": 0.2692
+          },
+          {
+            "bin": "0.3-0.4",
+            "n": 404,
+            "mean_predicted": 0.346,
+            "observed_rate": 0.2995
+          },
+          {
+            "bin": "0.4-0.5",
+            "n": 194,
+            "mean_predicted": 0.4442,
+            "observed_rate": 0.4227
+          },
+          {
+            "bin": "0.5-0.6",
+            "n": 88,
+            "mean_predicted": 0.543,
+            "observed_rate": 0.5227
+          },
+          {
+            "bin": "0.6-0.7",
+            "n": 39,
+            "mean_predicted": 0.643,
+            "observed_rate": 0.7179
+          },
+          {
+            "bin": "0.7-0.8",
+            "n": 6,
+            "mean_predicted": 0.7338,
+            "observed_rate": 0.5
+          },
+          {
+            "bin": "0.8-0.9",
+            "n": 1,
+            "mean_predicted": 0.8178,
+            "observed_rate": 1.0
+          }
+        ],
+        "calibrated_metrics_valid": true
+      },
+      "feature_importances": [
+        {
+          "feature": "age",
+          "mean_abs_shap": 0.3243
+        },
+        {
+          "feature": "smoker",
+          "mean_abs_shap": 0.2174
+        },
+        {
+          "feature": "n_diagnoses",
+          "mean_abs_shap": 0.2143
+        },
+        {
+          "feature": "adherence_rate_90d",
+          "mean_abs_shap": 0.1967
+        },
+        {
+          "feature": "n_sdoh_risks",
+          "mean_abs_shap": 0.1554
+        },
+        {
+          "feature": "adherence_rate_1y_ago",
+          "mean_abs_shap": 0.1334
+        },
+        {
+          "feature": "adherence_trend",
+          "mean_abs_shap": 0.1053
+        },
+        {
+          "feature": "insurance_uninsured",
+          "mean_abs_shap": 0.0689
+        },
+        {
+          "feature": "insurance_private",
+          "mean_abs_shap": 0.0507
+        },
+        {
+          "feature": "bmi",
+          "mean_abs_shap": 0.0229
+        }
+      ]
+    }
+  },
+  "artifact": {
+    "file": "models-20261127T171546Z-db5430d.pkl",
+    "sha256": "7665bbaeadf8540257b8ad50fe0ca3b99ecde9ccbd8da7d91edb35ae7faed525",
+    "version": "20261127T171546Z-db5430d"
+  }
+}

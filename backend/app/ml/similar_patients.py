@@ -1,16 +1,15 @@
 """
 Similar patient matching using K-Nearest Neighbors on demographics.
-Works with both SQLite (v2) and PostgreSQL (v3) backends.
+The index is built by app.ml.train and shipped inside the hash-checked model bundle.
 """
-import pickle
+import logging
 from collections import Counter
-from pathlib import Path
 
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
-MODEL_PATH = Path("data/models/knn_similar.pkl")
+logger = logging.getLogger(__name__)
 
 # Global state
 _knn_model = None
@@ -65,87 +64,34 @@ def _encode_features(patients_data):
     return np.array(features), ids
 
 
-def build_knn_index_from_pg():
-    """Build KNN index from PostgreSQL database."""
+def build_knn_payload(patients_data: list[dict]) -> dict:
+    """Fit the KNN index; the payload is stored inside the versioned model bundle."""
     global _knn_model, _scaler, _patient_ids
+    features, ids = _encode_features(patients_data)
+    _scaler = StandardScaler()
+    features_scaled = _scaler.fit_transform(features)
+    _knn_model = NearestNeighbors(n_neighbors=11, metric="euclidean", algorithm="ball_tree")
+    _knn_model.fit(features_scaled)
+    _patient_ids = ids
+    return {"model": _knn_model, "scaler": _scaler, "patient_ids": _patient_ids,
+            "label_encoders": _label_encoders, "patient_info": dict(_patient_info)}
+
+
+def build_knn_payload_from_pg() -> dict:
+    """Build the KNN index from PostgreSQL."""
     from sqlalchemy import text as sa_text
 
     from app.data.database_pg import get_sync_engine
 
-    engine = get_sync_engine()
-    with engine.connect() as conn:
+    with get_sync_engine().connect() as conn:
         result = conn.execute(sa_text(
             "SELECT patient_id::text, first_name, last_name, age, gender, bmi, "
             "race, insurance_type, n_sdoh_risks, adherence_archetype "
             "FROM patients LIMIT 100000"
         ))
         patients_data = [dict(r._mapping) for r in result]
-
-    print(f"  Building KNN index from {len(patients_data)} patients...")
-    features, ids = _encode_features(patients_data)
-
-    _scaler = StandardScaler()
-    features_scaled = _scaler.fit_transform(features)
-
-    _knn_model = NearestNeighbors(n_neighbors=11, metric="euclidean", algorithm="ball_tree")
-    _knn_model.fit(features_scaled)
-    _patient_ids = ids
-
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(MODEL_PATH, "wb") as f:
-        pickle.dump({
-            "model": _knn_model,
-            "scaler": _scaler,
-            "patient_ids": _patient_ids,
-            "label_encoders": _label_encoders,
-            "patient_info": _patient_info,
-        }, f)
-    print(f"  KNN index built: {len(ids)} patients")
-
-
-def build_knn_index():
-    """Build KNN index from SQLite (v2 compat)."""
-    global _knn_model, _scaler, _patient_ids
-    try:
-        from app.data.database import get_similar_patients_data
-        patients_data = get_similar_patients_data()
-    except Exception:
-        build_knn_index_from_pg()
-        return
-
-    features, ids = _encode_features(patients_data)
-    _scaler = StandardScaler()
-    features_scaled = _scaler.fit_transform(features)
-
-    _knn_model = NearestNeighbors(n_neighbors=11, metric="euclidean", algorithm="ball_tree")
-    _knn_model.fit(features_scaled)
-    _patient_ids = ids
-
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(MODEL_PATH, "wb") as f:
-        pickle.dump({
-            "model": _knn_model,
-            "scaler": _scaler,
-            "patient_ids": _patient_ids,
-            "label_encoders": _label_encoders,
-            "patient_info": _patient_info,
-        }, f)
-    print(f"  KNN index built: {len(ids)} patients")
-
-
-def load_knn_index():
-    """Load pre-built KNN index."""
-    global _knn_model, _scaler, _patient_ids, _label_encoders, _patient_info
-    if MODEL_PATH.exists():
-        with open(MODEL_PATH, "rb") as f:
-            data = pickle.load(f)
-        _knn_model = data["model"]
-        _scaler = data["scaler"]
-        _patient_ids = data["patient_ids"]
-        _label_encoders = data["label_encoders"]
-        _patient_info = data.get("patient_info", {})
-        return True
-    return False
+    logger.info("Building KNN index from %d patients", len(patients_data))
+    return build_knn_payload(patients_data)
 
 
 def find_similar_patients(patient_id: str, k: int = 10, knn_data=None) -> list:
@@ -159,7 +105,7 @@ def find_similar_patients(patient_id: str, k: int = 10, knn_data=None) -> list:
         _patient_ids = knn_data["patient_ids"]
         _label_encoders = knn_data["label_encoders"]
         _patient_info = knn_data.get("patient_info", {})
-    elif _knn_model is None and not load_knn_index():
+    elif _knn_model is None:
         return []
 
     # Get patient info

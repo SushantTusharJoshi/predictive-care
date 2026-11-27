@@ -1,10 +1,7 @@
 """PredictiveCare v3.1 — Production-ready FastAPI backend.
 Includes: patient creation, reminder dispatch, trust scoring, HITL, HIPAA.
 """
-import json
 import logging
-import os
-import pickle
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
@@ -55,33 +52,57 @@ MODELS = {}
 FEATURE_COLS = []
 METRICS = {}
 KNN_INDEX = None
+MODEL_INFO = {"version": None, "sha256": None}
+
+
+def metrics_view(metrics: dict) -> dict:
+    """Per-target summary in the shape the admin page reads (auc, f1, precision,
+    recall, feature_importances), plus the new fields. Test-slice numbers only."""
+    if "targets" not in metrics:
+        return {}
+    view = {}
+    for target, info in metrics["targets"].items():
+        t = info.get("test")
+        if not t:
+            continue
+        view[target] = {
+            "auc": t["roc_auc"], "pr_auc": t["pr_auc"], "brier": t["brier"],
+            "precision": t["precision"], "recall": t["recall"], "f1": t["f1"],
+            "threshold": t["threshold"], "best_algorithm": info["selected"],
+            "calibration": info["calibration"].get("method") or info["calibration"]["status"],
+            "calibrated_metrics_valid": t["calibrated_metrics_valid"],
+            "baseline_auc": info["candidates"]["logreg"]["test"]["roc_auc"],
+            "version": metrics.get("version"), "label": metrics.get("label"),
+            "feature_importances": [{"feature": f["feature"], "importance": f["mean_abs_shap"]}
+                                    for f in info.get("feature_importances", [])],
+        }
+    return view
 
 
 def load_models():
-    global MODELS, FEATURE_COLS, METRICS, KNN_INDEX
-    model_dir = settings.model_dir
-    for name, filename in [("models", "models.pkl"), ("knn", "knn_similar.pkl")]:
-        path = os.path.join(model_dir, filename)
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                data = pickle.load(f)
-            if name == "models":
-                MODELS.update(data)
-                logger.info(f"Loaded ML models: {list(data.keys())}")
-            else:
-                global KNN_INDEX
-                KNN_INDEX = data
-                logger.info("Loaded KNN index")
+    """Load the versioned bundle only if its sha256 matches the manifest (PC-N12)."""
+    global KNN_INDEX
+    from pathlib import Path
 
-    fc_path = os.path.join(model_dir, "feature_cols.json")
-    if os.path.exists(fc_path):
-        with open(fc_path) as f:
-            FEATURE_COLS.extend(json.load(f))
+    from app.ml import artifacts
 
-    metrics_path = os.path.join(model_dir, "metrics.json")
-    if os.path.exists(metrics_path):
-        with open(metrics_path) as f:
-            METRICS.update(json.load(f))
+    model_dir = Path(settings.model_dir)
+    version = settings.model_version or None
+    if artifacts.read_manifest(model_dir, version) is None:
+        artifacts.download(model_dir)  # no-op unless MODEL_S3_URI is set and boto3 + creds exist
+    try:
+        bundle, metrics, manifest = artifacts.load_bundle(model_dir, version)
+    except artifacts.ArtifactError as e:
+        logger.error("Models not loaded: %s", e)
+        return
+    MODELS.clear()
+    MODELS.update(bundle["models"])
+    FEATURE_COLS[:] = bundle["feature_cols"]
+    METRICS.clear()
+    METRICS.update(metrics_view(metrics))
+    KNN_INDEX = bundle.get("knn")
+    MODEL_INFO.update(version=manifest["version"], sha256=manifest["sha256"])
+    logger.info("Loaded models %s (%s)", manifest["version"], ", ".join(MODELS))
 
 
 @asynccontextmanager
@@ -130,6 +151,7 @@ async def generic_error(request: Request, exc: Exception):
 @app.get("/health")
 async def health():
     return {"status": "healthy", "version": "3.1.0", "models_loaded": len(MODELS) > 0,
+            "model_version": MODEL_INFO["version"],
             "hipaa_audit": True, "timestamp": datetime.now(UTC).isoformat()}
 
 
@@ -228,7 +250,7 @@ async def patient_detail(request: Request, patient_id: str,
                 logger.exception("Prediction failed for a patient detail request")
                 detail["predictions"] = {"error": "Prediction unavailable"}
         else:
-            detail["predictions"] = {"error": "Models not loaded — run: python -m app.ml.train_pg"}
+            detail["predictions"] = {"error": "Models not loaded. Run: python -m app.ml.train"}
     await log_audit(user["username"], user["role"], "view_patient", patient_id, patient_id=patient_id)
     return detail
 
@@ -478,14 +500,20 @@ async def hipaa_data_flow(user=Depends(require_role(["admin"]))):
 
 
 # ━━━ ML helpers ━━━
+def _feature_row(features: dict) -> pd.DataFrame:
+    """One row in training column order. Keys are matched case-insensitively
+    (get_patient_features returns gender_M; training uses gender_m)."""
+    lower = {k.lower(): v for k, v in features.items()}
+    return pd.DataFrame([{c: float(lower.get(c.lower(), 0) or 0) for c in FEATURE_COLS}])
+
+
 def _predict(features: dict) -> dict:
     scores = {}
-    fc = [c.lower() for c in FEATURE_COLS]
     for name, data in MODELS.items():
         try:
-            model = data.get("model") or data.get("xgb")
+            model = data.get("model")
             if not model: continue
-            row = pd.DataFrame([{c: features.get(c, features.get(c.lower(), 0)) for c in fc}])
+            row = _feature_row(features)
             scores[name] = round(float(model.predict_proba(row)[0, 1]), 4)
         except Exception:
             logger.exception("Prediction failed for %s", name)
@@ -494,13 +522,14 @@ def _predict(features: dict) -> dict:
 
 def _predict_with_shap(features: dict) -> dict:
     results = {}
-    fc = [c.lower() for c in FEATURE_COLS]
+    fc = list(FEATURE_COLS)
+    lower = {k.lower(): v for k, v in features.items()}
     for name, data in MODELS.items():
         try:
-            model = data.get("model") or data.get("xgb")
+            model = data.get("model")
             explainer = data.get("explainer")
             if not model: continue
-            row = pd.DataFrame([{c: features.get(c, features.get(c.lower(), 0)) for c in fc}])
+            row = _feature_row(features)
             prob = float(model.predict_proba(row)[0, 1])
             top_features = []
             if explainer:
@@ -509,11 +538,15 @@ def _predict_with_shap(features: dict) -> dict:
                 vals = sv[0] if len(sv.shape) > 1 else sv
                 indexed = sorted(zip(fc, vals, strict=False), key=lambda x: abs(x[1]), reverse=True)
                 top_features = [{"feature": f, "shap_value": round(float(v), 4),
-                                 "value": features.get(f, 0)} for f, v in indexed[:8]]
+                                 "value": lower.get(f.lower(), 0)} for f, v in indexed[:8]]
+            threshold = float(getattr(model, "threshold", 0.5))
             results[name] = {
                 "probability": round(prob, 4),
                 "risk_level": "high" if prob > 0.7 else "moderate" if prob > 0.4 else "low",
                 "top_features": top_features,
+                "threshold": round(threshold, 4),
+                "flagged": prob >= threshold,
+                "model_version": MODEL_INFO["version"],
             }
         except Exception:
             logger.exception("Prediction with SHAP failed for %s", name)

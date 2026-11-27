@@ -39,7 +39,7 @@ echo "   ✅ 100K patients loaded with adherence, pharmacy, and trust scores"
 
 echo ""
 echo "🤖 Step 4/5: Training ML models..."
-python -m app.ml.train_pg
+python -m app.ml.train
 echo "   ✅ Models trained"
 cd ..
 

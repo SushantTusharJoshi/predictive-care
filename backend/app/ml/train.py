@@ -1,244 +1,450 @@
+"""The one training pipeline (PC-F12, PC-F13, PC-F14).
+
+Replaces train_pg.py, train_standalone.py and the old SQLite train.py.
+
+    cd backend
+    python -m app.ml.train                      # from Postgres (DATABASE_URL_SYNC)
+    python -m app.ml.train --source memory --n 2000   # tiny in-memory synthetic run (tests)
+
+Steps per target: build features before an index date and labels after it, order
+patients by time and cut 70/10/20 into train / calibration / test, fit a logistic
+regression baseline, XGBoost, LightGBM and their log-odds ensemble on train, pick
+the algorithm and fit calibration and the decision threshold on the calibration
+slice only, then report everything once on the untouched test slice.
 """
-ML training pipeline v2.
-Reads from SQLite, trains XGBoost+LightGBM ensemble, saves SHAP explainers.
-"""
-import json
-import pickle
-import sqlite3
-import warnings
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import subprocess
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import lightgbm as lgb
+import numpy as np
 import pandas as pd
-import shap
 import xgboost as xgb
-from sklearn.metrics import roc_auc_score
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-warnings.filterwarnings("ignore")
+from app.ml import artifacts
+from app.ml.risk_model import RiskModel
 
-DATA_DIR = Path("data")
-MODEL_DIR = DATA_DIR / "models"
-DB_PATH = DATA_DIR / "predictive_care.db"
+logger = logging.getLogger(__name__)
 
+TARGETS = ["er_visit_30d", "care_need_90d", "care_need_30d"]
 FEATURE_COLS = [
-    "age", "gender_m", "bmi", "n_sdoh_risks",
-    "insurance_medicare", "insurance_medicaid",
-    "n_active_conditions", "has_diabetes_type2", "has_hypertension",
-    "has_heart_failure", "has_copd", "has_ckd",
-    "adherence_rate_90d", "avg_response_latency",
-    "adherence_rate_1y_ago", "adherence_trend",
-    "n_encounters", "n_er_visits", "n_inpatient",
-    "any_readmission", "max_los",
-    "avg_refill_gap", "max_refill_gap",
+    "age", "gender_m", "bmi", "smoker", "n_sdoh_risks",
+    "insurance_medicaid", "insurance_medicare", "insurance_private", "insurance_uninsured",
+    "n_diagnoses", "n_active_meds",
+    "adherence_rate_90d", "adherence_rate_1y_ago", "adherence_trend",
+    "avg_response_latency", "avg_sbp", "avg_hr",
 ]
+# Never features: labels, or columns derived from the outcome window
+LEAKY_FEATURES = {
+    "er_visits_1y", "er_visit_30d", "care_need_90d", "care_need_30d",
+    "arch_excellent", "arch_good", "arch_moderate", "arch_poor", "arch_erratic",
+    "adherence_archetype",
+}
+assert not LEAKY_FEATURES & set(FEATURE_COLS), "label leakage in FEATURE_COLS"
+
+SPLIT = (0.7, 0.1, 0.2)
+MIN_CLASS_FOR_CALIBRATION = 10   # each class needs this many rows in the calibration slice
+SEED = 42
 
 
-def _build_features_df():
-    """Build feature matrix from SQLite for all patients."""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
+# ━━━ Data ━━━
 
-    print("  Loading patient data...")
-    patients = pd.read_sql("SELECT patient_id, age, gender, bmi, n_sdoh_risks, insurance_type, adherence_archetype FROM patients", conn)
+POSTGRES_SQL = """
+WITH adh AS (
+    SELECT a.patient_id,
+        AVG(CASE WHEN a.taken THEN 100.0 ELSE 0.0 END)
+            FILTER (WHERE a.event_date >= :idx - 90) AS adherence_rate_90d,
+        AVG(CASE WHEN a.taken THEN 100.0 ELSE 0.0 END)
+            FILTER (WHERE a.event_date >= :idx - 365 AND a.event_date < :idx - 275) AS adherence_rate_1y_ago,
+        AVG(a.response_latency_min) FILTER (WHERE a.taken AND a.event_date >= :idx - 90) AS avg_response_latency
+    FROM adherence_events a
+    WHERE a.event_date >= :idx - 365 AND a.event_date < :idx
+    GROUP BY a.patient_id
+),
+vit AS (
+    SELECT patient_id, AVG(systolic_bp) AS avg_sbp, AVG(heart_rate) AS avg_hr
+    FROM vitals WHERE vital_date < :idx GROUP BY patient_id
+),
+dx AS (
+    SELECT patient_id, COUNT(*) AS n FROM diagnoses
+    WHERE onset_date IS NULL OR onset_date < :idx GROUP BY patient_id
+),
+meds AS (
+    SELECT patient_id, COUNT(*) AS n FROM medications
+    WHERE active AND (start_date IS NULL OR start_date < :idx) GROUP BY patient_id
+),
+enc AS (
+    SELECT patient_id,
+        MIN(encounter_date) AS first_encounter,
+        BOOL_OR(encounter_type = 'er'
+                AND encounter_date >= :idx AND encounter_date < :idx + 30) AS er_visit_30d,
+        BOOL_OR(encounter_type IN ('er', 'inpatient', 'urgent_care')
+                AND encounter_date >= :idx AND encounter_date < :idx + 30) AS care_need_30d,
+        BOOL_OR(encounter_type IN ('er', 'inpatient', 'urgent_care')
+                AND encounter_date >= :idx AND encounter_date < :idx + 90) AS care_need_90d
+    FROM encounters GROUP BY patient_id
+)
+SELECT
+    p.patient_id::text AS patient_id,
+    COALESCE(enc.first_encounter, p.created_at::date) AS patient_time,
+    p.age,
+    CASE WHEN p.gender = 'M' THEN 1 ELSE 0 END AS gender_m,
+    COALESCE(p.bmi, 25.0) AS bmi,
+    CASE WHEN p.smoker THEN 1 ELSE 0 END AS smoker,
+    COALESCE(p.n_sdoh_risks, 0) AS n_sdoh_risks,
+    CASE WHEN p.insurance_type = 'medicaid' THEN 1 ELSE 0 END AS insurance_medicaid,
+    CASE WHEN p.insurance_type = 'medicare' THEN 1 ELSE 0 END AS insurance_medicare,
+    CASE WHEN p.insurance_type = 'private' THEN 1 ELSE 0 END AS insurance_private,
+    CASE WHEN p.insurance_type = 'uninsured' THEN 1 ELSE 0 END AS insurance_uninsured,
+    COALESCE(dx.n, 0) AS n_diagnoses,
+    COALESCE(meds.n, 0) AS n_active_meds,
+    -- same defaults as get_patient_features() at serving time
+    COALESCE(adh.adherence_rate_90d, 0) AS adherence_rate_90d,
+    COALESCE(adh.adherence_rate_1y_ago, 0) AS adherence_rate_1y_ago,
+    COALESCE(adh.avg_response_latency, 30) AS avg_response_latency,
+    COALESCE(vit.avg_sbp, 120) AS avg_sbp,
+    COALESCE(vit.avg_hr, 75) AS avg_hr,
+    COALESCE(enc.er_visit_30d, false)::int AS er_visit_30d,
+    COALESCE(enc.care_need_90d, false)::int AS care_need_90d,
+    COALESCE(enc.care_need_30d, false)::int AS care_need_30d
+FROM patients p
+LEFT JOIN adh ON adh.patient_id = p.patient_id
+LEFT JOIN vit ON vit.patient_id = p.patient_id
+LEFT JOIN dx ON dx.patient_id = p.patient_id
+LEFT JOIN meds ON meds.patient_id = p.patient_id
+LEFT JOIN enc ON enc.patient_id = p.patient_id
+WHERE COALESCE(enc.first_encounter, p.created_at::date) < :idx
+"""
 
-    print("  Computing diagnosis features...")
-    dx = pd.read_sql("""
-        SELECT patient_id,
-               COUNT(*) as n_active_conditions,
-               MAX(CASE WHEN condition='diabetes_type2' THEN 1 ELSE 0 END) as has_diabetes_type2,
-               MAX(CASE WHEN condition='hypertension' THEN 1 ELSE 0 END) as has_hypertension,
-               MAX(CASE WHEN condition='heart_failure' THEN 1 ELSE 0 END) as has_heart_failure,
-               MAX(CASE WHEN condition='copd' THEN 1 ELSE 0 END) as has_copd,
-               MAX(CASE WHEN condition='ckd' THEN 1 ELSE 0 END) as has_ckd
-        FROM diagnoses WHERE status='active'
-        GROUP BY patient_id
-    """, conn)
 
-    print("  Computing adherence features...")
-    adh = pd.read_sql("""
-        SELECT patient_id,
-               AVG(taken) as adherence_rate_90d,
-               AVG(CASE WHEN taken=1 THEN response_latency_min END) as avg_response_latency
-        FROM adherence_events
-        WHERE event_date >= date('now', '-90 days')
-        GROUP BY patient_id
-    """, conn)
+def load_postgres(engine=None, as_of: date | None = None, limit: int | None = None) -> tuple[pd.DataFrame, dict]:
+    """Features strictly before the index date, labels in the 30/90 days after it.
 
-    adh_1y = pd.read_sql("""
-        SELECT patient_id, AVG(taken) as adherence_rate_1y_ago
-        FROM adherence_events
-        WHERE event_date BETWEEN date('now', '-15 months') AND date('now', '-12 months')
-        GROUP BY patient_id
-    """, conn)
+    as_of defaults to the latest encounter in the database, so an old demo database
+    still has a full label window. index date = as_of - 90 days.
+    """
+    from sqlalchemy import text
 
-    print("  Computing encounter features...")
-    enc = pd.read_sql("""
-        SELECT patient_id,
-               COUNT(*) as n_encounters,
-               SUM(CASE WHEN encounter_type='er' THEN 1 ELSE 0 END) as n_er_visits,
-               SUM(CASE WHEN encounter_type='inpatient' THEN 1 ELSE 0 END) as n_inpatient,
-               MAX(readmission_flag) as any_readmission,
-               MAX(los_days) as max_los
-        FROM encounters GROUP BY patient_id
-    """, conn)
-
-    print("  Computing pharmacy features...")
-    pharm = pd.read_sql("""
-        SELECT patient_id,
-               AVG(actual_gap_days) as avg_refill_gap,
-               MAX(actual_gap_days) as max_refill_gap
-        FROM pharmacy_refills GROUP BY patient_id
-    """, conn)
-
-    # ER target: had ER visit in last 30 days
-    er_target = pd.read_sql("""
-        SELECT patient_id, 1 as er_visit_30d
-        FROM encounters
-        WHERE encounter_type='er' AND encounter_date >= date('now', '-30 days')
-        GROUP BY patient_id
-    """, conn)
-
-    # Care need 90d target: had inpatient/ER in last 90 days
-    care_target = pd.read_sql("""
-        SELECT patient_id, 1 as care_need_90d
-        FROM encounters
-        WHERE encounter_type IN ('er','inpatient') AND encounter_date >= date('now', '-90 days')
-        GROUP BY patient_id
-    """, conn)
-
-    # Care need 30d target: had inpatient/ER in last 30 days
-    care_30d_target = pd.read_sql("""
-        SELECT patient_id, 1 as care_need_30d
-        FROM encounters
-        WHERE encounter_type IN ('er','inpatient','urgent_care') AND encounter_date >= date('now', '-30 days')
-        GROUP BY patient_id
-    """, conn)
-
-    # Patient created_at for temporal split
-    created_at = pd.read_sql("SELECT patient_id, created_at FROM patients", conn)
-
-    conn.close()
-
-    # Merge all
-    df = patients.copy()
-    df["gender_m"] = (df["gender"] == "M").astype(int)
-    df["insurance_medicare"] = (df["insurance_type"] == "medicare").astype(int)
-    df["insurance_medicaid"] = (df["insurance_type"] == "medicaid").astype(int)
-
-    for extra in [dx, adh, adh_1y, enc, pharm]:
-        df = df.merge(extra, on="patient_id", how="left")
-
-    df = df.merge(er_target, on="patient_id", how="left")
-    df = df.merge(care_target, on="patient_id", how="left")
-    df = df.merge(care_30d_target, on="patient_id", how="left")
-    df = df.merge(created_at, on="patient_id", how="left")
-
-    df["er_visit_30d"] = df["er_visit_30d"].fillna(0).astype(int)
-    df["care_need_90d"] = df["care_need_90d"].fillna(0).astype(int)
-    df["care_need_30d"] = df["care_need_30d"].fillna(0).astype(int)
-
-    # Adherence trend
-    df["adherence_rate_90d"] = df["adherence_rate_90d"].fillna(0.5)
-    df["adherence_rate_1y_ago"] = df["adherence_rate_1y_ago"].fillna(0.5)
+    if engine is None:
+        from app.data.database_pg import get_sync_engine
+        engine = get_sync_engine()
+    with engine.connect() as conn:
+        if as_of is None:
+            as_of = conn.execute(text("SELECT MAX(encounter_date) FROM encounters")).scalar() or date.today()
+        idx = as_of - timedelta(days=90)
+        sql = POSTGRES_SQL.replace(":idx", "CAST(:idx AS date)")
+        if limit:
+            sql += " ORDER BY patient_time DESC LIMIT :limit"
+        df = pd.read_sql(text(sql), conn, params={"idx": idx, "limit": limit})
     df["adherence_trend"] = df["adherence_rate_90d"] - df["adherence_rate_1y_ago"]
+    info = {"source": "postgres", "as_of": str(as_of), "index_date": str(idx),
+            "patient_time": "first recorded encounter (falls back to created_at)",
+            "feature_window": "events before the index date",
+            "label_windows": {"er_visit_30d": "ER visit in [index, index+30d)",
+                              "care_need_30d": "ER, inpatient or urgent care in [index, index+30d)",
+                              "care_need_90d": "ER, inpatient or urgent care in [index, index+90d)"}}
+    return df, info
 
-    df = df.fillna(0)
-    return df
+
+def load_memory(n: int = 2000, seed: int = SEED) -> tuple[pd.DataFrame, dict]:
+    """Tiny in-memory synthetic cohort with a known logistic signal (for tests)."""
+    rng = np.random.default_rng(seed)
+    adh = np.clip(rng.normal(75, 15, n), 0, 100)
+    df = pd.DataFrame({
+        "patient_id": [f"mem-{i:06d}" for i in range(n)],
+        "patient_time": pd.Timestamp("2021-01-01") + pd.to_timedelta(rng.integers(0, 4 * 365, n), unit="D"),
+        "age": rng.integers(18, 93, n),
+        "gender_m": rng.integers(0, 2, n),
+        "bmi": np.clip(rng.normal(28.5, 6, n), 16, 55).round(1),
+        "smoker": (rng.random(n) < 0.18).astype(int),
+        "n_sdoh_risks": rng.choice([0, 1, 2, 3], n, p=[0.4, 0.3, 0.2, 0.1]),
+        "n_diagnoses": rng.poisson(1.5, n),
+        "n_active_meds": rng.poisson(2.0, n),
+        "adherence_rate_90d": adh.round(1),
+        "adherence_rate_1y_ago": np.clip(adh + rng.normal(5, 8, n), 0, 100).round(1),
+        "avg_response_latency": np.clip(rng.exponential(25, n), 1, 180).round(1),
+        "avg_sbp": np.clip(rng.normal(130, 14, n), 90, 200).round(1),
+        "avg_hr": np.clip(rng.normal(75, 10, n), 50, 120).round(1),
+    })
+    ins = rng.choice(["medicaid", "medicare", "private", "uninsured"], n, p=[0.21, 0.18, 0.52, 0.09])
+    for k in ("medicaid", "medicare", "private", "uninsured"):
+        df[f"insurance_{k}"] = (ins == k).astype(int)
+    df["adherence_trend"] = df["adherence_rate_90d"] - df["adherence_rate_1y_ago"]
+    base = (3.0 * (1 - df.adherence_rate_90d / 100) + 0.5 * df.n_diagnoses / 2 + 0.7 * df.smoker
+            + 0.4 * df.n_sdoh_risks / 2 + 0.03 * np.maximum(0, df.age - 50) + 0.5 * df.insurance_uninsured)
+    for target, intercept in (("er_visit_30d", -3.2), ("care_need_90d", -2.2), ("care_need_30d", -3.4)):
+        p = 1 / (1 + np.exp(-(intercept + base + rng.normal(0, 0.3, n))))
+        df[target] = (rng.random(n) < p).astype(int)
+    return df, {"source": "memory", "patient_time": "synthetic enrolment date", "n_requested": n, "seed": seed}
 
 
-def _train_model(X_train, y_train, X_test, y_test, name):
-    """Train XGBoost + LightGBM ensemble."""
-    print(f"\n  Training {name}...")
-    print(f"    Train: {len(X_train)} ({y_train.sum()} positive)")
-    print(f"    Test:  {len(X_test)} ({y_test.sum()} positive)")
+# ━━━ Split ━━━
 
-    scale = max(1, (len(y_train) - y_train.sum()) / max(y_train.sum(), 1))
+def time_split(df: pd.DataFrame, fractions=SPLIT) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Oldest patients train, the next slice calibrates, the newest are the test set."""
+    d = df.sort_values(["patient_time", "patient_id"]).reset_index(drop=True)
+    n = len(d)
+    a = int(round(n * fractions[0]))
+    b = int(round(n * (fractions[0] + fractions[1])))
+    return d.iloc[:a], d.iloc[a:b], d.iloc[b:]
 
-    # XGBoost
-    xgb_model = xgb.XGBClassifier(
-        n_estimators=200, max_depth=5, learning_rate=0.05,
-        scale_pos_weight=scale, eval_metric="logloss",
-        random_state=42, n_jobs=-1
-    )
-    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
-    xgb_pred = xgb_model.predict_proba(X_test)[:, 1]
 
-    # LightGBM
-    lgb_model = lgb.LGBMClassifier(
-        n_estimators=200, max_depth=5, learning_rate=0.05,
-        scale_pos_weight=scale, random_state=42, n_jobs=-1, verbose=-1
-    )
-    lgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)])
-    lgb_pred = lgb_model.predict_proba(X_test)[:, 1]
+def _slice_info(s: pd.DataFrame) -> dict:
+    return {"n": len(s), "from": str(s["patient_time"].min())[:10], "to": str(s["patient_time"].max())[:10]}
 
-    # Ensemble
-    ensemble_pred = 0.5 * xgb_pred + 0.5 * lgb_pred
-    auc = roc_auc_score(y_test, ensemble_pred)
-    print(f"    Ensemble AUC: {auc:.4f}")
 
-    # SHAP on XGBoost
-    explainer = shap.TreeExplainer(xgb_model)
+# ━━━ Models ━━━
 
+def fit_candidates(X: pd.DataFrame, y: pd.Series) -> dict[str, RiskModel]:
+    pos = max(int(y.sum()), 1)
+    scale = max(1.0, (len(y) - pos) / pos)
+    logreg = Pipeline([("scale", StandardScaler()),
+                       ("clf", LogisticRegression(max_iter=2000, class_weight="balanced"))]).fit(X, y)
+    xgbm = xgb.XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8,
+                             colsample_bytree=0.8, scale_pos_weight=scale, eval_metric="logloss",
+                             random_state=SEED, n_jobs=2).fit(X, y)
+    lgbm = lgb.LGBMClassifier(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8,
+                              subsample_freq=1, colsample_bytree=0.8, scale_pos_weight=scale,
+                              random_state=SEED, n_jobs=2, verbose=-1).fit(X, y)
+    cols = list(X.columns)
     return {
-        "xgb": xgb_model,
-        "lgb": lgb_model,
-        "explainer": explainer,
-        "auc": auc,
-        "feature_names": list(X_train.columns),
+        "logreg": RiskModel("logreg", cols, logreg=logreg),
+        "xgboost": RiskModel("xgboost", cols, xgb=xgbm),
+        "lightgbm": RiskModel("lightgbm", cols, lgb=lgbm),
+        "ensemble": RiskModel("ensemble", cols, xgb=xgbm, lgb=lgbm),
     }
 
 
-def _temporal_split(df, test_fraction=0.2):
-    """TRUE temporal split: oldest patients train, newest patients test."""
-    df_sorted = df.sort_values("created_at").reset_index(drop=True)
-    split_idx = int(len(df_sorted) * (1 - test_fraction))
-    return df_sorted.iloc[:split_idx], df_sorted.iloc[split_idx:]
+def _safe_auc(y, p, fn):
+    return round(float(fn(y, p)), 4) if len(set(np.asarray(y).tolist())) == 2 else None
 
 
-def train():
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+def best_f1_threshold(y, p) -> float:
+    """Threshold that maximises F1 on the given (calibration) slice."""
+    y, p = np.asarray(y), np.asarray(p)
+    if y.sum() == 0:
+        return 0.5
+    best_t, best_f1 = 0.5, -1.0
+    for t in np.unique(np.round(p, 4)):
+        f1 = f1_score(y, (p >= t).astype(int), zero_division=0)
+        if f1 > best_f1:
+            best_t, best_f1 = float(t), f1
+    return round(best_t, 4)
 
-    print("Building feature matrix...")
-    df = _build_features_df()
-    print(f"  Total patients: {len(df)}")
 
-    # Temporal split: oldest patients train, newest patients test
-    train_df, test_df = _temporal_split(df)
-    print(f"  Temporal split: train {len(train_df)}, test {len(test_df)}")
+def threshold_metrics(y, p, t) -> dict:
+    pred = (np.asarray(p) >= t).astype(int)
+    return {"threshold": round(float(t), 4),
+            "precision": round(float(precision_score(y, pred, zero_division=0)), 4),
+            "recall": round(float(recall_score(y, pred, zero_division=0)), 4),
+            "f1": round(float(f1_score(y, pred, zero_division=0)), 4)}
 
-    X_tr = train_df[FEATURE_COLS]
-    X_te = test_df[FEATURE_COLS]
-    models_info = {}
 
-    for target, label in [("er_visit_30d", "ER Visit 30d"),
-                          ("care_need_90d", "Care Need 90d"),
-                          ("care_need_30d", "Care Need 30d")]:
-        y_tr = train_df[target]
-        y_te = test_df[target]
-        models_info[target] = _train_model(X_tr, y_tr, X_te, y_te, label)
+def score_metrics(y, p) -> dict:
+    return {"roc_auc": _safe_auc(y, p, roc_auc_score),
+            "pr_auc": _safe_auc(y, p, average_precision_score),
+            "brier": round(float(brier_score_loss(y, p)), 4) if len(y) else None}
 
-    # --- Adherence Trust Score (regression-like: use archetype as proxy) ---
-    arch_map = {"excellent": 0.95, "good": 0.80, "moderate": 0.60, "poor": 0.35, "erratic": 0.45}
-    df["trust_score"] = df["adherence_archetype"].map(arch_map).fillna(0.5)
 
-    # Save models
-    print("\nSaving models...")
-    with open(MODEL_DIR / "models.pkl", "wb") as f:
-        pickle.dump(models_info, f)
+def reliability(y, p, bins: int = 10) -> tuple[list[dict], float | None]:
+    """Equal-width bins: mean predicted vs observed rate, plus expected calibration error."""
+    y, p = np.asarray(y), np.asarray(p)
+    if not len(y):
+        return [], None
+    edges = np.linspace(0, 1, bins + 1)
+    idx = np.clip(np.digitize(p, edges[1:-1]), 0, bins - 1)
+    rows, ece = [], 0.0
+    for b in range(bins):
+        m = idx == b
+        if not m.any():
+            continue
+        mean_p, obs = float(p[m].mean()), float(y[m].mean())
+        ece += m.sum() / len(y) * abs(mean_p - obs)
+        rows.append({"bin": f"{edges[b]:.1f}-{edges[b + 1]:.1f}", "n": int(m.sum()),
+                     "mean_predicted": round(mean_p, 4), "observed_rate": round(obs, 4)})
+    return rows, round(ece, 4)
 
-    # Save feature columns
-    with open(MODEL_DIR / "feature_cols.json", "w") as f:
-        json.dump(FEATURE_COLS, f)
 
-    # Save model metrics
-    metrics = {name: {"auc": info["auc"], "n_features": len(info["feature_names"])}
-               for name, info in models_info.items()}
-    with open(MODEL_DIR / "metrics.json", "w") as f:
-        json.dump(metrics, f, indent=2)
+def _fit_calibrator(method, raw, y):
+    if method == "isotonic":
+        return IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0).fit(raw, y)
+    logit = np.log(np.clip(raw, 1e-6, 1 - 1e-6) / np.clip(1 - raw, 1e-6, 1)).reshape(-1, 1)
+    return LogisticRegression(max_iter=1000).fit(logit, y)
 
-    print("Done. Models saved to", MODEL_DIR)
-    return models_info
+
+def fit_calibration(model: RiskModel, X_cal, y_cal) -> dict:
+    """PC-F13: choose isotonic or sigmoid by 5-fold CV Brier inside the calibration
+    slice, refit the winner on the whole slice. The test slice is never touched."""
+    y_cal = np.asarray(y_cal)
+    pos, neg = int(y_cal.sum()), int(len(y_cal) - y_cal.sum())
+    if min(pos, neg) < MIN_CLASS_FOR_CALIBRATION:
+        return {"status": "skipped", "reason": f"calibration slice has {pos} positives and {neg} negatives; "
+                f"need {MIN_CLASS_FOR_CALIBRATION} of each", "method": None}
+    raw = model.raw_proba(X_cal)
+    folds = StratifiedKFold(n_splits=min(5, pos, neg), shuffle=True, random_state=SEED)
+    cv = {}
+    for method in ("isotonic", "sigmoid"):
+        losses = []
+        for tr, va in folds.split(raw.reshape(-1, 1), y_cal):
+            probe = RiskModel(model.algorithm, model.feature_cols)
+            probe.calibrator = (method, _fit_calibrator(method, raw[tr], y_cal[tr]))
+            losses.append(brier_score_loss(y_cal[va], probe.calibrate(raw[va])))
+        cv[method] = round(float(np.mean(losses)), 5)
+    uncal = round(float(brier_score_loss(y_cal, raw)), 5)
+    method = min(cv, key=cv.get)
+    model.calibrator = (method, _fit_calibrator(method, raw, y_cal))
+    return {"status": "applied", "method": method, "cv_brier": cv, "uncalibrated_brier_on_calibration": uncal,
+            "chosen_on": "calibration slice (5-fold CV Brier)"}
+
+
+def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
+    Xtr, Xcal, Xte = train[FEATURE_COLS], cal[FEATURE_COLS], test[FEATURE_COLS]
+    ytr, ycal, yte = train[target].astype(int), cal[target].astype(int), test[target].astype(int)
+    info = {"positive_rate": {"train": round(float(ytr.mean()), 4), "calibration": round(float(ycal.mean()), 4),
+                              "test": round(float(yte.mean()), 4)},
+            "positives": {"train": int(ytr.sum()), "calibration": int(ycal.sum()), "test": int(yte.sum())}}
+    if ytr.nunique() < 2:
+        info["skipped"] = "training slice has a single class"
+        return None, info
+
+    candidates = fit_candidates(Xtr, ytr)
+    table = {}
+    for name, m in candidates.items():
+        p_cal, p_te = m.raw_proba(Xcal), m.raw_proba(Xte)
+        t = best_f1_threshold(ycal, p_cal)
+        table[name] = {"calibration": score_metrics(ycal, p_cal),
+                       "test": {**score_metrics(yte, p_te), **threshold_metrics(yte, p_te, t)}}
+    info["candidates"] = table
+
+    # selection uses the calibration slice only; ties go to the simpler model (dict order)
+    def cal_auc(name):
+        a = table[name]["calibration"]["roc_auc"]
+        return -1 if a is None else a
+    selected = max(candidates, key=cal_auc)
+    model = candidates[selected]
+    info["selected"] = selected
+    info["selected_by"] = "ROC-AUC on the calibration slice"
+    if all(table[n]["calibration"]["roc_auc"] is None for n in table):
+        info["selected_by"] = "calibration slice has one class; fell back to the logistic baseline"
+
+    info["calibration"] = fit_calibration(model, Xcal, ycal)
+    p_cal = model.predict_proba(Xcal)[:, 1]
+    model.threshold = best_f1_threshold(ycal, p_cal)
+    info["threshold"] = {"value": model.threshold, "rule": "max F1", "chosen_on": "calibration slice",
+                         "valid": bool(ycal.sum() > 0)}
+
+    raw_te, p_te = model.raw_proba(Xte), model.predict_proba(Xte)[:, 1]
+    rel_raw, ece_raw = reliability(yte, raw_te)
+    rel_cal, ece_cal = reliability(yte, p_te)
+    test_m = {**score_metrics(yte, p_te), **threshold_metrics(yte, p_te, model.threshold),
+              "f1_at_0_5": threshold_metrics(yte, p_te, 0.5)["f1"],
+              "brier_uncalibrated": round(float(brier_score_loss(yte, raw_te)), 4),
+              "ece_uncalibrated": ece_raw, "ece": ece_cal,
+              "reliability": rel_cal if model.calibrator else rel_raw}
+    applied = info["calibration"]["status"] == "applied"
+    test_m["calibrated_metrics_valid"] = bool(applied and ece_cal is not None and ece_raw is not None
+                                              and ece_cal <= ece_raw)
+    if applied and not test_m["calibrated_metrics_valid"]:
+        info["calibration"]["note"] = "calibration did not lower test ECE; calibrated metrics are not claimed"
+    info["test"] = test_m
+
+    shap_abs = np.abs(model.shap_values(Xte)).mean(axis=0) if len(Xte) else np.zeros(len(FEATURE_COLS))
+    order = np.argsort(-shap_abs)
+    info["feature_importances"] = [{"feature": FEATURE_COLS[i], "mean_abs_shap": round(float(shap_abs[i]), 4)}
+                                   for i in order[:10]]
+    return model, info
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL,
+                                       text=True).strip()
+    except Exception:
+        return os.getenv("RAILWAY_GIT_COMMIT_SHA", "nogit")[:7]
+
+
+def run(df: pd.DataFrame, data_info: dict, model_dir: Path | None = None, version: str | None = None,
+        label: str = "demo", knn: dict | None = None) -> dict:
+    """Train every target, and (when model_dir is given) write the versioned artifact."""
+    df = df.copy()
+    df[FEATURE_COLS] = df[FEATURE_COLS].astype(float).fillna(0)
+    train, cal, test = time_split(df)
+    version = version or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + _git_sha()
+    metrics = {
+        "version": version, "created_at": datetime.now(UTC).isoformat(), "label": label,
+        "data": {**data_info, "n_patients": len(df)},
+        "split": {"method": "time-ordered by patient_time", "fractions": list(SPLIT),
+                  "train": _slice_info(train), "calibration": _slice_info(cal), "test": _slice_info(test)},
+        "feature_cols": FEATURE_COLS, "targets": {},
+    }
+    models = {}
+    for target in TARGETS:
+        model, info = train_target(target, train, cal, test)
+        metrics["targets"][target] = info
+        if model is not None:
+            models[target] = {"model": model, "explainer": model}
+            t = info["test"]
+            logger.info("%s: %s roc_auc=%s pr_auc=%s brier=%s f1=%s@%s calibration=%s", target, info["selected"],
+                        t["roc_auc"], t["pr_auc"], t["brier"], t["f1"], t["threshold"],
+                        info["calibration"].get("method") or info["calibration"]["status"])
+    if model_dir is not None:
+        bundle = {"version": version, "models": models, "feature_cols": FEATURE_COLS, "knn": knn}
+        manifest = artifacts.save_bundle(Path(model_dir), version, bundle, metrics)
+        metrics["artifact"] = {k: manifest[k] for k in ("file", "sha256", "version")}
+    return metrics
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--source", choices=["postgres", "memory"], default="postgres")
+    ap.add_argument("--n", type=int, default=2000, help="patients for --source memory")
+    ap.add_argument("--limit", type=int, default=None, help="newest N patients for --source postgres")
+    ap.add_argument("--as-of", type=date.fromisoformat, default=None)
+    ap.add_argument("--model-dir", default=None)
+    ap.add_argument("--label", default="demo", help="recorded in metrics.json, e.g. demo")
+    ap.add_argument("--upload", action="store_true", help="upload to MODEL_S3_URI if boto3 and credentials exist")
+    ap.add_argument("--no-knn", action="store_true")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.model_dir is None:
+        from app.config import get_settings
+        args.model_dir = get_settings().model_dir
+
+    if args.source == "memory":
+        df, info = load_memory(args.n)
+        knn = None
+    else:
+        df, info = load_postgres(as_of=args.as_of, limit=args.limit)
+        knn = None
+        if not args.no_knn:
+            from app.ml.similar_patients import build_knn_payload_from_pg
+            knn = build_knn_payload_from_pg()
+    logger.info("Loaded %d patients from %s", len(df), info["source"])
+    metrics = run(df, info, Path(args.model_dir), label=args.label, knn=knn)
+    logger.info("Saved %s (sha256 %s)", metrics["artifact"]["file"], metrics["artifact"]["sha256"][:12])
+    if args.upload:
+        artifacts.upload(Path(args.model_dir), artifacts.read_manifest(Path(args.model_dir)))
+    return metrics
 
 
 if __name__ == "__main__":
-    train()
+    main()

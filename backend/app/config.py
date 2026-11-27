@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8", protected_namespaces=("settings_",))
 
     # No password in code: set DATABASE_URL / DATABASE_URL_SYNC in .env or the host's variables
     database_url: str = "postgresql+asyncpg://pc_user@localhost:5432/predictive_care"
@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     log_level: str = "info"
     rate_limit_per_minute: int = 60
     model_dir: str = "data/models"
+    # Pin a model version (models-<version>.pkl); empty = the one named in current.json
+    model_version: str = ""
     hipaa_audit_enabled: bool = True
     session_timeout_minutes: int = 30
 
