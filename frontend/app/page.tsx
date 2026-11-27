@@ -28,6 +28,7 @@ export default function LoginPage() {
     }
   }
 
+  const showDemoLogins = process.env.NEXT_PUBLIC_DEMO_LOGINS !== 'false';
   const quickLogins = [
     { u: 'admin', label: 'Admin' },
     { u: 'physician', label: 'Physician' },
@@ -58,7 +59,7 @@ export default function LoginPage() {
           </button>
         </div>
 
-        <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+        {showDemoLogins && <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 12, color: 'var(--tx3)', marginBottom: 8 }}>Quick Login (Demo)</div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
             {quickLogins.map(q => (
@@ -77,7 +78,7 @@ export default function LoginPage() {
               </button>
             ))}
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );
