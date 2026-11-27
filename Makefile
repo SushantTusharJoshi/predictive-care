@@ -36,7 +36,7 @@ ingest-synthea: ## Download Synthea, generate 100K patients, then ingest
 	cd backend && python -m app.data.ingest_synthea --synthea-dir ./synthea_output/csv
 
 train: ## Train ML models
-	cd backend && python -m app.ml.train_pg
+	cd backend && python -m app.ml.train
 
 db-shell: ## Open psql shell
 	docker compose exec db psql -U pc_user -d predictive_care
@@ -59,6 +59,6 @@ deploy-frontend: ## Deploy frontend to Vercel
 
 clean: ## Remove generated files
 	docker compose down -v 2>/dev/null || true
-	rm -rf backend/data/models/*.pkl backend/data/models/*.json
+	rm -rf backend/data/models/*.pkl backend/data/models/*.json backend/data/models/*.sha256
 	rm -rf backend/synthea_output backend/synthea.jar
 	rm -rf frontend/.next frontend/node_modules
