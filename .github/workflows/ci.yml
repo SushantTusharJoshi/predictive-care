@@ -35,3 +35,66 @@ jobs:
           DATABASE_URL_SYNC: "postgresql://ci@localhost:5432/ci"
           JWT_SECRET: "test-secret"
           ENVIRONMENT: "test"
+
+  # PC-N6: narrative eval gate with llm-eval-kit. Mock by default (no keys, runs on
+  # every PR); the Groq run is added only when the GROQ_API_KEY secret exists.
+  narrative-eval:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HAS_GROQ: ${{ secrets.GROQ_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gate (mock provider, compared with the recorded baseline)
+        uses: SushantTusharJoshi/llm-eval-kit@main
+        with:
+          suite: backend/evals/narratives.yaml
+          baseline: backend/evals/baseline-mock.json
+          provider: mock
+          report-path: eval-mock.json
+
+      - name: Seeded bad narratives (expected to fail)
+        id: seeded
+        continue-on-error: true
+        uses: SushantTusharJoshi/llm-eval-kit@main
+        with:
+          suite: backend/evals/narratives_seeded_bad.yaml
+          provider: mock
+          report-path: eval-seeded.json
+
+      - name: The gate must have caught every seeded bad narrative
+        env:
+          SEEDED_OUTCOME: ${{ steps.seeded.outcome }}
+        run: |
+          test "$SEEDED_OUTCOME" = "failure" || { echo "seeded bad narratives passed the gate"; exit 1; }
+          python - <<'PY'
+          import json
+          results = json.load(open("eval-seeded.json"))["results"]
+          passed = [r["id"] for r in results if r["passed"]]
+          assert results and not passed, f"seeded cases that passed: {passed}"
+          print(f"all {len(results)} seeded bad narratives failed, as they should")
+          PY
+
+      - name: Gate (Groq, live)
+        if: env.HAS_GROQ == 'true'
+        uses: SushantTusharJoshi/llm-eval-kit@main
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        with:
+          suite: backend/evals/narratives.yaml
+          provider: groq
+          max-cost: "0.10"
+          report-path: eval-groq.json
+
+      - name: Exact SHAP check and rules on the Groq narratives
+        if: env.HAS_GROQ == 'true'
+        run: python backend/evals/check_report.py eval-groq.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: narrative-eval-reports
+          path: eval-*.json
+          if-no-files-found: ignore

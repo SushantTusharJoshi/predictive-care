@@ -1,0 +1,54 @@
+{
+  "cases": {
+    "care30-moderate-quality": {
+      "critical": false,
+      "passed": true,
+      "score": 1.0
+    },
+    "care30-moderate-safety": {
+      "critical": true,
+      "passed": true,
+      "score": 1.0
+    },
+    "care30-moderate-shap": {
+      "critical": true,
+      "passed": true,
+      "score": 1.0
+    },
+    "care90-low-quality": {
+      "critical": false,
+      "passed": true,
+      "score": 1.0
+    },
+    "care90-low-safety": {
+      "critical": true,
+      "passed": true,
+      "score": 1.0
+    },
+    "care90-low-shap": {
+      "critical": true,
+      "passed": true,
+      "score": 1.0
+    },
+    "er-high-quality": {
+      "critical": false,
+      "passed": true,
+      "score": 1.0
+    },
+    "er-high-safety": {
+      "critical": true,
+      "passed": true,
+      "score": 1.0
+    },
+    "er-high-shap": {
+      "critical": true,
+      "passed": true,
+      "score": 1.0
+    }
+  },
+  "format": 1,
+  "model": "mock",
+  "pass_rate": 1.0,
+  "provider": "mock",
+  "suite": "predictive-care-narratives"
+}
