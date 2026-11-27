@@ -1,23 +1,37 @@
+# Pinned to the versions the test suite and the training run were verified with (Python 3.12).
+# Web
 fastapi==0.115.6
+starlette==0.41.3
 uvicorn[standard]==0.32.1
+gunicorn==23.0.0
 pydantic==2.10.3
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
 python-multipart==0.0.19
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-httpx==0.28.1
-pandas>=2.0.0
-numpy>=2.0.0
-xgboost>=2.0.0
-lightgbm>=4.0.0
-scikit-learn>=1.5.0
-shap>=0.44.0
-gunicorn==23.0.0
 slowapi==0.1.9
+httpx==0.28.1
+
+# Auth
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.9.5
 bcrypt==3.2.2
-sqlalchemy[asyncio]>=2.0.0
-asyncpg>=0.29.0
-groq>=0.4.0
-aiofiles>=23.0.0
-aiosqlite>=0.19.0
+
+# Database: asyncpg serves the API; psycopg (v3) is the sync driver for training and
+# ingest. SQLAlchemy 2.1 maps a bare postgresql:// URL to psycopg, so it must be installed.
+sqlalchemy[asyncio]==2.1.9
+asyncpg==0.32.0
+psycopg[binary]==3.3.9
+
+# ML
+numpy==2.5.5
+pandas==3.1.1
+scipy==1.18.1
+scikit-learn==1.9.1
+xgboost==3.4.1
+lightgbm==4.7.0
+shap==0.54.1
+
+# Legacy, removed with the SQLite path
+groq==1.7.0
+aiofiles==25.1.0
+aiosqlite==0.22.1
