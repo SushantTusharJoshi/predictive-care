@@ -11,6 +11,15 @@ from app.middleware.hipaa import de_identify_for_llm
 
 logger = logging.getLogger(__name__)
 
+# PC-N4: only these insurance labels ever reach a prompt; anything else becomes "other",
+# so a free-text field cannot carry instructions into the LLM.
+ALLOWED_INSURANCE = ("private", "medicare", "medicaid", "uninsured", "employer")
+
+
+def safe_insurance(value) -> str:
+    v = str(value or "").strip().lower()
+    return v if v in ALLOWED_INSURANCE else "other"
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
@@ -69,7 +78,7 @@ what the top contributing factors mean clinically.
 **Patient Demographics (de-identified):**
 Age: {safe.get('age', 'N/A')}, BMI: {safe.get('bmi', 'N/A')}
 Active conditions: {len(safe.get('diagnoses', []))}
-Insurance: {safe.get('insurance_type', 'N/A')}
+Insurance: {safe_insurance(safe.get('insurance_type'))}
 SDOH risks: {safe.get('n_sdoh_risks', 0)}
 
 **Top Contributing Factors (SHAP analysis):**

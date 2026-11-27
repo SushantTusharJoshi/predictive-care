@@ -7,10 +7,12 @@ import os
 import pickle
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -18,6 +20,8 @@ from slowapi.util import get_remote_address
 
 from app.config import get_settings
 from app.data.database_pg import (
+    SORT_DIRECTIONS,
+    SORTABLE_COLUMNS,
     action_scheduling_recommendation,
     close_db,
     create_scheduling_recommendation,
@@ -96,12 +100,30 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(HipaaAuditMiddleware)
 
-origins = ["http://localhost:3000", "http://127.0.0.1:3000", settings.frontend_url]
-cors_kwargs = dict(allow_origins=origins, allow_credentials=True,
+
+
+def cors_origins(cfg=settings) -> list[str]:
+    """PC-N4: credentials are only shared with the configured frontend.
+
+    FRONTEND_URL may hold a comma-separated list (for a preview URL). The old
+    allow_origin_regex for any *.vercel.app site is gone: any Vercel user could have
+    called the API with a visitor's credentials.
+    """
+    origins = [o.strip().rstrip("/") for o in cfg.frontend_url.split(",") if o.strip()]
+    if cfg.environment != "production":
+        origins += ["http://localhost:3000", "http://127.0.0.1:3000"]
+    return sorted(set(origins))
+
+
+app.add_middleware(CORSMiddleware, allow_origins=cors_origins(), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
-if settings.environment == "production":
-    cors_kwargs["allow_origin_regex"] = r"https://.*\.vercel\.app"
-app.add_middleware(CORSMiddleware, **cors_kwargs)
+
+
+@app.exception_handler(Exception)
+async def generic_error(request: Request, exc: Exception):
+    """PC-N4: log the details server-side, return a body that leaks nothing."""
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # ━━━ Health ━━━
@@ -121,7 +143,8 @@ async def login(request: Request):
         raise HTTPException(401, "Invalid credentials")
     token = create_token(user)
     await log_audit(user["username"], user["role"], "login", "auth")
-    return {"token": token, "role": user["role"], "name": user["name"], "username": user["username"]}
+    return {"token": token, "role": user["role"], "name": user["name"], "username": user["username"],
+            "demo": user["demo"]}
 
 
 # ━━━ Patient CRUD ━━━
@@ -132,7 +155,7 @@ class CreatePatientRequest(BaseModel):
     gender: str = "M"
     race: str = ""
     ethnicity: str = ""
-    insurance_type: str = "private"
+    insurance_type: Literal["private", "medicare", "medicaid", "uninsured", "employer"] = "private"
     bmi: float = 25.0
     smoker: bool = False
     sdoh_risk_factors: list[str] = []
@@ -145,7 +168,7 @@ class CreatePatientRequest(BaseModel):
 @limiter.limit("30/minute")
 async def create_new_patient(
     request: Request, body: CreatePatientRequest,
-    user=Depends(require_role(["admin", "physician"])),
+    user=Depends(require_role(["admin", "physician"], permission="create_patients")),
 ):
     """Create a patient → auto-classify adherence archetype → ready for predictions."""
     result = await create_patient(body.model_dump())
@@ -162,6 +185,8 @@ async def list_patients(
     sort_by: str = "last_name", sort_dir: str = "asc",
     user=Depends(require_role(["admin", "physician", "nurse", "coordinator"])),
 ):
+    if sort_by not in SORTABLE_COLUMNS or sort_dir not in SORT_DIRECTIONS:
+        raise HTTPException(400, "Unsupported sort_by or sort_dir")
     result = await search_patients(q, archetype, page, page_size, sort_by, sort_dir)
     archetype_risk = {
         "excellent": {"er_visit_30d": 0.05, "care_need_90d": 0.08},
@@ -199,8 +224,9 @@ async def patient_detail(request: Request, patient_id: str,
             try:
                 features = await get_patient_features(patient_id)
                 detail["predictions"] = _predict_with_shap(features) if features else {"error": "No features"}
-            except Exception as e:
-                detail["predictions"] = {"error": str(e)}
+            except Exception:
+                logger.exception("Prediction failed for a patient detail request")
+                detail["predictions"] = {"error": "Prediction unavailable"}
         else:
             detail["predictions"] = {"error": "Models not loaded — run: python -m app.ml.train_pg"}
     await log_audit(user["username"], user["role"], "view_patient", patient_id, patient_id=patient_id)
@@ -343,7 +369,8 @@ async def shap_narrative(request: Request, patient_id: str, prediction_type: str
         raise HTTPException(404, "No features for patient")
     detail["predictions"] = _predict_with_shap(features)
     pred_info = detail.get("predictions", {}).get(prediction_type)
-    if not pred_info or isinstance(pred_info, str): raise HTTPException(404, f"No prediction for {prediction_type}")
+    if not pred_info or isinstance(pred_info, str) or "error" in pred_info:
+        raise HTTPException(404, "No prediction for this type")
     narrative = await generate_shap_narrative(detail, pred_info, prediction_type)
     await log_audit(user["username"], user["role"], "view_shap_narrative", patient_id, patient_id=patient_id)
     return {"narrative": narrative, "prediction_type": prediction_type}
@@ -384,7 +411,7 @@ async def create_recommendation(request: Request, patient_id: str,
 @app.post("/schedule/{rec_id}/action")
 @limiter.limit("30/minute")
 async def action_recommendation(request: Request, rec_id: str, body: ScheduleActionRequest,
-    user=Depends(require_role(["admin", "physician", "coordinator"]))):
+    user=Depends(require_role(["admin", "physician", "coordinator"], permission="approve_recommendations"))):
     result = await action_scheduling_recommendation(rec_id, body.action, user["username"], body.reason)
     await log_audit(user["username"], user["role"], "action_schedule_rec", rec_id)
     return result
@@ -403,7 +430,7 @@ async def clinician_feedback(request: Request, patient_id: str, body: FeedbackRe
 @app.post("/patients/{patient_id}/override")
 @limiter.limit("20/minute")
 async def override_prediction(request: Request, patient_id: str, body: OverrideRequest,
-    user=Depends(require_role(["admin", "physician"]))):
+    user=Depends(require_role(["admin", "physician"], permission="override_predictions"))):
     await log_hitl_action(patient_id, user["username"], "override_prediction",
         prediction_type=body.prediction_type, original_value=body.original_value,
         overridden_value=body.overridden_value, reason=body.reason)
@@ -424,7 +451,7 @@ async def stats(request: Request,
 
 @app.get("/audit")
 @limiter.limit("30/minute")
-async def audit(request: Request, user=Depends(require_role(["admin"]))):
+async def audit(request: Request, user=Depends(require_role(["admin"], permission="view_audit"))):
     events = await get_audit_log(limit=200)
     return {"events": events}
 
@@ -460,8 +487,8 @@ def _predict(features: dict) -> dict:
             if not model: continue
             row = pd.DataFrame([{c: features.get(c, features.get(c.lower(), 0)) for c in fc}])
             scores[name] = round(float(model.predict_proba(row)[0, 1]), 4)
-        except Exception as e:
-            logger.warning("Prediction failed for %s: %s", name, e)
+        except Exception:
+            logger.exception("Prediction failed for %s", name)
     return scores
 
 
@@ -488,6 +515,7 @@ def _predict_with_shap(features: dict) -> dict:
                 "risk_level": "high" if prob > 0.7 else "moderate" if prob > 0.4 else "low",
                 "top_features": top_features,
             }
-        except Exception as e:
-            results[name] = {"error": str(e)}
+        except Exception:
+            logger.exception("Prediction with SHAP failed for %s", name)
+            results[name] = {"error": "Prediction unavailable"}
     return results

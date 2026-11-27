@@ -40,13 +40,13 @@ def build_users(cfg=settings) -> dict:
     users = {}
     if demo_logins_enabled(cfg):
         for username, (role, name) in _DEMO_ACCOUNTS.items():
-            users[username] = {"password": pwd_ctx.hash(username), "role": role, "name": name}
+            users[username] = {"password": pwd_ctx.hash(username), "role": role, "name": name, "demo": True}
     if cfg.auth_users:
         for username, info in json.loads(cfg.auth_users).items():
             if info["role"] not in ROLE_PERMISSIONS:
                 raise ValueError(f"AUTH_USERS: unknown role '{info['role']}' for '{username}'")
             users[username] = {"password": info["password_hash"], "role": info["role"],
-                               "name": info.get("name", username)}
+                               "name": info.get("name", username), "demo": False}
     return users
 
 
@@ -84,16 +84,36 @@ def check_default_credentials(cfg=settings, users=None):
 ROLE_PERMISSIONS = {
     "admin": ["view_patients", "view_predictions", "view_admin", "view_alerts",
               "manage_users", "view_ml_metrics", "view_audit", "approve_recommendations",
-              "view_shap", "view_adherence", "view_reminders", "view_scheduling", "view_hitl"],
+              "view_shap", "view_adherence", "view_reminders", "view_scheduling", "view_hitl",
+              "override_predictions", "create_patients"],
     "physician": ["view_patients", "view_predictions", "view_alerts",
                   "approve_recommendations", "view_shap", "view_adherence",
-                  "view_reminders", "view_scheduling", "view_hitl"],
+                  "view_reminders", "view_scheduling", "view_hitl",
+                  "override_predictions", "create_patients"],
     "nurse": ["view_patients", "view_alerts", "view_adherence", "view_reminders"],
     "coordinator": ["view_patients", "view_alerts", "view_scheduling",
                     "approve_recommendations", "view_adherence", "view_reminders"],
 }
 
+# PC-F16: demo accounts see synthetic data but cannot take actions that a real
+# clinician or admin would own. Real AUTH_USERS keep their full role permissions.
+DEMO_DENIED = {"approve_recommendations", "override_predictions", "create_patients",
+               "view_audit", "manage_users"}
+
 USERS = build_users()
+
+
+def is_demo_user(username: str, claim: bool | None = None) -> bool:
+    """Demo if the token says so or the live user table marks the name as a demo account.
+
+    Checking the table too covers tokens issued before the claim existed.
+    """
+    return bool(claim) or bool(USERS.get(username, {}).get("demo", False))
+
+
+def effective_permissions(role: str, demo: bool) -> list[str]:
+    perms = ROLE_PERMISSIONS.get(role, [])
+    return [p for p in perms if p not in DEMO_DENIED] if demo else list(perms)
 
 
 def authenticate(username: str, password: str) -> dict | None:
@@ -101,7 +121,8 @@ def authenticate(username: str, password: str) -> dict | None:
     user = USERS.get(username)
     if not user or not pwd_ctx.verify(password, user["password"]):
         return None
-    return {"username": username, "role": user["role"], "name": user["name"]}
+    return {"username": username, "role": user["role"], "name": user["name"],
+            "demo": bool(user.get("demo", False))}
 
 
 def create_token(user: dict) -> str:
@@ -110,6 +131,7 @@ def create_token(user: dict) -> str:
         "sub": user["username"],
         "role": user["role"],
         "name": user["name"],
+        "demo": bool(user.get("demo", False)),
         "exp": datetime.now(UTC) + timedelta(hours=JWT_EXPIRE_HOURS),
         "iat": datetime.now(UTC),
     }
@@ -137,22 +159,25 @@ def _extract_user(authorization: str | None) -> dict:
     payload = verify_token(token)
     if not payload:
         raise HTTPException(401, "Invalid or expired token")
+    username = payload.get("sub", "unknown")
     return {
-        "username": payload.get("sub", "unknown"),
+        "username": username,
         "role": payload.get("role", ""),
         "name": payload.get("name", ""),
+        "demo": is_demo_user(username, payload.get("demo")),
     }
 
 
-def require_role(allowed_roles: list[str]):
+def require_role(allowed_roles: list[str], permission: str | None = None):
     """FastAPI dependency that enforces RBAC.
     Usage: user = Depends(require_role(["admin", "physician"]))
+    With `permission`, a demo account is refused even when its role is allowed.
     """
     async def _dependency(authorization: str = Header(None)) -> dict:
         user = _extract_user(authorization)
         if user["role"] not in allowed_roles:
-            raise HTTPException(
-                403, f"Role '{user['role']}' not authorized. Required: {allowed_roles}"
-            )
+            raise HTTPException(403, "Your role is not authorized for this action")
+        if permission and permission not in effective_permissions(user["role"], user["demo"]):
+            raise HTTPException(403, "Demo accounts are view-only for this action")
         return user
     return _dependency
