@@ -26,7 +26,7 @@ async def get_patient_reminder_schedule(patient_id: str) -> list[dict]:
                 SELECT medication_id, medication_name, dosage, frequency,
                        reminder_time_1, reminder_time_2
                 FROM medications
-                WHERE patient_id = :pid::uuid AND active = true
+                WHERE patient_id = CAST(:pid AS uuid) AND active = true
             """),
             {"pid": patient_id}
         )
@@ -48,7 +48,7 @@ async def get_patient_reminder_schedule(patient_id: str) -> list[dict]:
                     text("""
                         SELECT taken, patient_response, taken_time
                         FROM adherence_events
-                        WHERE patient_id = :pid::uuid
+                        WHERE patient_id = CAST(:pid AS uuid)
                         AND medication_name = :med
                         AND event_date = CURRENT_DATE
                         LIMIT 1
@@ -62,7 +62,7 @@ async def get_patient_reminder_schedule(patient_id: str) -> list[dict]:
                     text("""
                         SELECT score, classification
                         FROM trust_scores
-                        WHERE patient_id = :pid::uuid AND medication_name = :med
+                        WHERE patient_id = CAST(:pid AS uuid) AND medication_name = :med
                         ORDER BY computed_at DESC LIMIT 1
                     """),
                     {"pid": patient_id, "med": med.medication_name}
@@ -131,7 +131,7 @@ async def record_patient_response(patient_id: str, medication_name: str,
         trust = await session.execute(
             text("""
                 SELECT score FROM trust_scores
-                WHERE patient_id = :pid::uuid AND medication_name = :med
+                WHERE patient_id = CAST(:pid AS uuid) AND medication_name = :med
                 ORDER BY computed_at DESC LIMIT 1
             """),
             {"pid": patient_id, "med": medication_name}
@@ -170,7 +170,7 @@ async def record_patient_response(patient_id: str, medication_name: str,
         await session.execute(
             text("""
                 UPDATE reminder_logs SET acknowledged = true, acknowledged_at = NOW()
-                WHERE patient_id = :pid::uuid AND medication_name = :med
+                WHERE patient_id = CAST(:pid AS uuid) AND medication_name = :med
                 AND DATE(sent_at) = CURRENT_DATE AND acknowledged = false
             """),
             {"pid": patient_id, "med": medication_name}
@@ -198,7 +198,7 @@ async def check_missed_doses(patient_id: str) -> dict:
                     SELECT medication_name, event_date, taken,
                            ROW_NUMBER() OVER (PARTITION BY medication_name ORDER BY event_date DESC) as rn
                     FROM adherence_events
-                    WHERE patient_id = :pid::uuid AND event_date >= CURRENT_DATE - 7
+                    WHERE patient_id = CAST(:pid AS uuid) AND event_date >= CURRENT_DATE - 7
                 )
                 SELECT medication_name,
                        COUNT(*) FILTER (WHERE NOT taken AND rn <= 3) as consecutive_misses
