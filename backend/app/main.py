@@ -44,7 +44,7 @@ from app.services.auth import (
     require_role,
 )
 from app.services.create_patient import create_patient
-from app.services.narratives import longitudinal_narrative_result, shap_narrative_result
+from app.services.narratives import longitudinal_narrative_result, risk_label, shap_narrative_result
 from app.services.reminders import (
     check_missed_doses,
     get_patient_reminder_schedule,
@@ -81,6 +81,7 @@ def metrics_view(metrics: dict) -> dict:
             "threshold": t["threshold"], "best_algorithm": info["selected"],
             "calibration": info["calibration"].get("method") or info["calibration"]["status"],
             "calibrated_metrics_valid": t["calibrated_metrics_valid"],
+            "calibrated": info.get("calibrated", info["calibration"]["status"] == "applied"),
             "baseline_auc": info["candidates"]["logreg"]["test"]["roc_auc"],
             "version": metrics.get("version"), "label": metrics.get("label"),
             "fairness": info.get("fairness"),
@@ -697,9 +698,13 @@ def _predict_with_shap(features: dict) -> dict:
                 top_features = [{"feature": f, "shap_value": round(float(v), 4),
                                  "value": lower.get(f.lower(), 0)} for f, v in indexed[:8]]
             threshold = float(getattr(model, "threshold", 0.5))
+            calibrated = bool(getattr(model, "calibrator", None))
+            percentile = model.percentile(prob) if hasattr(model, "percentile") else None
             results[name] = {
                 "probability": round(prob, 4),
-                "risk_level": "high" if prob > 0.7 else "moderate" if prob > 0.4 else "low",
+                "calibrated": calibrated,
+                "percentile": percentile,
+                **risk_label(prob, calibrated, percentile),
                 "top_features": top_features,
                 "threshold": round(threshold, 4),
                 "flagged": prob >= threshold,

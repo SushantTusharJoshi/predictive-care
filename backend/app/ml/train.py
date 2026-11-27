@@ -226,8 +226,10 @@ def _slice_info(s: pd.DataFrame) -> dict:
 def fit_candidates(X: pd.DataFrame, y: pd.Series) -> dict[str, RiskModel]:
     pos = max(int(y.sum()), 1)
     scale = max(1.0, (len(y) - pos) / pos)
+    # unweighted: a balanced logistic baseline scores near 50% for an average patient, which reads as
+    # an inflated probability whenever calibration is skipped (rare targets such as er_visit_30d)
     logreg = Pipeline([("scale", StandardScaler()),
-                       ("clf", LogisticRegression(max_iter=2000, class_weight="balanced"))]).fit(X, y)
+                       ("clf", LogisticRegression(max_iter=2000))]).fit(X, y)
     xgbm = xgb.XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8,
                              colsample_bytree=0.8, scale_pos_weight=scale, eval_metric="logloss",
                              random_state=SEED, n_jobs=2).fit(X, y)
@@ -358,6 +360,29 @@ def fit_calibration(model: RiskModel, X_cal, y_cal) -> dict:
             "chosen_on": "calibration slice (5-fold CV Brier)"}
 
 
+def prior_shift(model: RiskModel, X_train, y_train) -> dict:
+    """When calibration is skipped, shift the log-odds by a constant so the mean score on the
+    train slice equals the train base rate. Undoes class weighting (scale_pos_weight) in the
+    trees; ranking, AUC and SHAP directions are unchanged."""
+    margin = model.margin(X_train)
+    rate = float(np.mean(y_train))
+    lo, hi = -20.0, 20.0
+    # LOOP: bisection; mean sigmoid(margin + offset) grows with offset
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if _sigmoid_mean(margin, mid) < rate:
+            lo = mid
+        else:
+            hi = mid
+    model.margin_offset = round((lo + hi) / 2, 6)
+    return {"offset": model.margin_offset, "train_base_rate": round(rate, 4),
+            "train_mean_score": round(_sigmoid_mean(margin, model.margin_offset), 4)}
+
+
+def _sigmoid_mean(margin, offset) -> float:
+    return float(np.mean(1 / (1 + np.exp(-(np.asarray(margin) + offset)))))
+
+
 # What it does: trains one target end to end: candidates, selection, calibration, threshold, one test report.
 # Catch it: "Where do you pick the model and the threshold so your test numbers stay honest?"
 # Card: docs/cards/train-target.md
@@ -394,8 +419,13 @@ def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
     if all(table[n]["calibration"]["roc_auc"] is None for n in table):
         info["selected_by"] = "calibration slice has one class; fell back to the logistic baseline"
 
-    # STEP: calibration and the F1 threshold, both from the calibration slice
+    # STEP: calibration and the F1 threshold, both from the calibration slice; without a
+    # calibrator, scores are not probabilities, so pin them to the base rate and say so
     info["calibration"] = fit_calibration(model, Xcal, ycal)
+    applied = info["calibration"]["status"] == "applied"
+    if not applied:
+        info["calibration"]["prior_shift"] = prior_shift(model, Xtr, ytr)
+    info["calibrated"] = applied
     p_cal = model.predict_proba(Xcal)[:, 1]
     model.threshold = best_f1_threshold(ycal, p_cal)
     info["threshold"] = {"value": model.threshold, "rule": "max F1", "chosen_on": "calibration slice",
@@ -410,12 +440,12 @@ def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
               "brier_uncalibrated": round(float(brier_score_loss(yte, raw_te)), 4),
               "ece_uncalibrated": ece_raw, "ece": ece_cal,
               "reliability": rel_cal if model.calibrator else rel_raw}
-    applied = info["calibration"]["status"] == "applied"
     test_m["calibrated_metrics_valid"] = bool(applied and ece_cal is not None and ece_raw is not None
                                               and ece_cal <= ece_raw)
     if applied and not test_m["calibrated_metrics_valid"]:
         info["calibration"]["note"] = "calibration did not lower test ECE; calibrated metrics are not claimed"
     info["test"] = test_m
+    model.score_quantiles = np.quantile(model.predict_proba(Xtr)[:, 1], np.linspace(0, 1, 101)).round(6)
     if FAIRNESS_GROUP in test.columns:
         info["fairness"] = fairness_by_group(test[FAIRNESS_GROUP], yte, p_te, model.threshold)
 

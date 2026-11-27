@@ -25,6 +25,20 @@ class RiskModel:
         self.logreg, self.xgb, self.lgb = logreg, xgb, lgb
         self.calibrator = None          # (method, fitted object) or None
         self.threshold = 0.5
+        self.margin_offset = 0.0        # prior-shift correction, used only when calibration is skipped
+        self.score_quantiles = None     # train-slice score percentiles, for relative rank
+
+    @property
+    def calibrated(self) -> bool:
+        """True only when a calibrator was fitted; otherwise scores rank patients but are not probabilities."""
+        return self.calibrator is not None
+
+    def percentile(self, p: float) -> float | None:
+        """Share of training patients (0-100) whose score is below p, or None without a reference."""
+        q = getattr(self, "score_quantiles", None)
+        if q is None or not len(q):
+            return None
+        return round(float(np.searchsorted(np.asarray(q), p, side="right")) / len(q) * 100, 1)
 
     # --- scores ---
     def _frame(self, X) -> pd.DataFrame:
@@ -43,7 +57,7 @@ class RiskModel:
         return np.mean(parts, axis=0)
 
     def raw_proba(self, X) -> np.ndarray:
-        return _sigmoid(self.margin(X))
+        return _sigmoid(self.margin(X) + getattr(self, "margin_offset", 0.0))
 
     def calibrate(self, raw: np.ndarray) -> np.ndarray:
         if not self.calibrator:

@@ -178,7 +178,7 @@ function PredictionsTab({ patient, narrative, onNarrative }: { patient: any; nar
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h3 style={{ fontSize: 16, fontWeight: 600, textTransform: 'capitalize' }}>{name.replace(/_/g, ' ')}</h3>
               <span className={`badge badge-${info.risk_level}`} style={{ fontSize: 14, padding: '4px 14px' }}>
-                {(info.probability * 100).toFixed(1)}%
+                {info.calibrated === false ? info.risk_label : `${(info.probability * 100).toFixed(1)}%`}
               </span>
             </div>
 
