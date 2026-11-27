@@ -491,7 +491,7 @@ async def hipaa_data_flow(user=Depends(require_role(["admin"]))):
     return {
         "version": "3.1.0",
         "data_flow": [
-            {"step": 1, "name": "Authentication", "description": "JWT + RBAC. MFA required in production."},
+            {"step": 1, "name": "Authentication", "description": "JWT + RBAC. No MFA yet."},
             {"step": 2, "name": "HIPAA Audit Middleware", "description": "Every PHI access logged with IP, user, timestamp, patient_id."},
             {"step": 3, "name": "Minimum Necessary Access", "description": "RBAC restricts endpoints by role."},
             {"step": 4, "name": "De-identification for LLM", "description": "Names, dates of birth, address, ZIP and identifiers stripped before any LLM call (Groq or Bedrock)."},

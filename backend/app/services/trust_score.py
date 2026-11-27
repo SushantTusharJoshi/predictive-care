@@ -25,15 +25,22 @@ STREAK_PENALTY = 0.15
 STREAK_LOOKBACK = 60    # most recent events read for the streak
 
 
+# What it does: length of the current unbroken run of YES reports, in one pass.
+# Catch it: "29 yes, 1 no, 1 yes. Is that a 30-day streak? Count it in one pass."
+# Card: docs/cards/yes-streak.md
 def consecutive_yes_streak(taken_in_order) -> int:
     """Current run of consecutive YES reports, oldest event first.
 
     One pass: each YES extends the run, any miss resets it to zero. So
     29 yes, 1 no, 1 yes ends with a streak of 1, not 30.
     """
+    # STEP: no run yet
     streak = 0
+    # LOOP: each report, oldest first
     for taken in taken_in_order:
+        # DECISION: yes extends the run, a miss resets it to zero
         streak = streak + 1 if taken else 0
+    # RETURN: the run that is still going at the newest report
     return streak
 
 

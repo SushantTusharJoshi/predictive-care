@@ -107,9 +107,13 @@ def _complete_with_fallback(prompt: str, max_tokens: int, providers=None):
     return None, tried
 
 
+# What it does: runs one narrative through cache, Guardrails, the provider chain and the local checks.
+# Catch it: "Your LLM provider is down, or it says something unsafe. What does the clinician see?"
+# Card: docs/cards/narrative-chain.md
 def narrate(prompt: str, template: str, top_features: list[dict] | None, cache_key=None,
             max_tokens: int = 1000, providers=None) -> dict:
     """Run one narrative through every layer. Returns text plus where it came from."""
+    # DECISION: a cached answer for this patient, model version and provider?
     if cache_key is not None:
         hit = CACHE.get(cache_key)
         if hit:
@@ -125,20 +129,24 @@ def narrate(prompt: str, template: str, top_features: list[dict] | None, cache_k
     if not any(((providers or {}).get(n) or build_provider(n)).available for n in names):
         return template_result("no narrative provider configured")
 
+    # DECISION: Guardrails clear the prompt (always true when Guardrails are off)
     cleared, why = guardrails.apply_guardrail(prompt, "INPUT")
     if not cleared:
         return template_result(why, cacheable="intervened" in why)
 
+    # STEP: configured provider, then the other one; None if both fail
     completion, tried = _complete_with_fallback(prompt, max_tokens, providers)
     if completion is None:
         return template_result("all providers failed", tried=tried)
 
+    # DECISION: local rules and the SHAP check, always on
     check = check_narrative(completion.text, top_features)
     if not check.ok:
         logger.info("Narrative rejected by local checks: %s", "; ".join(check.reasons))
         return template_result("failed local checks", cacheable=True, checks=check.reasons,
                                provider=completion.provider)
 
+    # DECISION: Guardrails clear the narrative
     cleared, why = guardrails.apply_guardrail(completion.text, "OUTPUT")
     if not cleared:
         return template_result(why, cacheable="intervened" in why, provider=completion.provider)
@@ -147,6 +155,7 @@ def narrate(prompt: str, template: str, top_features: list[dict] | None, cache_k
            "reason": "passed rules, SHAP check and guardrails", "tried": tried}
     if cache_key is not None:
         CACHE.put(cache_key, out)
+    # RETURN: the checked narrative; every "no" above returned the template instead
     return out
 
 

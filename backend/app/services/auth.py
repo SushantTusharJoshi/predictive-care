@@ -168,16 +168,23 @@ def _extract_user(authorization: str | None) -> dict:
     }
 
 
+# What it does: a FastAPI dependency that checks the token, the role, and the demo restriction.
+# Catch it: "Your public demo shares an admin login. How do you stop it approving or reading the audit log?"
+# Card: docs/cards/rbac-demo.md
 def require_role(allowed_roles: list[str], permission: str | None = None):
     """FastAPI dependency that enforces RBAC.
     Usage: user = Depends(require_role(["admin", "physician"]))
     With `permission`, a demo account is refused even when its role is allowed.
     """
     async def _dependency(authorization: str = Header(None)) -> dict:
+        # STEP: verify the JWT and read role and demo flag (401 if invalid)
         user = _extract_user(authorization)
+        # DECISION: is the role allowed on this endpoint?
         if user["role"] not in allowed_roles:
             raise HTTPException(403, "Your role is not authorized for this action")
+        # DECISION: for actions, does this account (demo or real) hold the permission?
         if permission and permission not in effective_permissions(user["role"], user["demo"]):
             raise HTTPException(403, "Demo accounts are view-only for this action")
+        # RETURN: the user, for audit logging in the route
         return user
     return _dependency

@@ -1,163 +1,194 @@
 # PredictiveCare
 
-A clinical risk prediction platform that predicts ER visit risk, care needs and medication adherence problems, explains each prediction, and keeps a clinician in the loop.
+Predicts ER-visit and care-need risk for a patient, explains each prediction with SHAP, turns the explanation into a
+checked plain-English note, and keeps a clinician in charge of every scheduling decision.
 
-> Synthetic data only. Not clinically validated and not for clinical use.
+Live demo: [predictive-care.vercel.app](https://predictive-care.vercel.app)
 
-**Stack:** FastAPI · PostgreSQL 16 · XGBoost/LightGBM · SHAP · Groq AI · Next.js 15
+> Synthetic data only. Not clinically validated and not for clinical use. Demo logins are view-only for actions.
+
+**Stack:** FastAPI, PostgreSQL 16, scikit-learn, XGBoost, LightGBM, SHAP, Groq or Amazon Bedrock, Next.js 15
 
 ---
 
-## System Architecture
+## Architecture
 
 ![PredictiveCare architecture: Next.js frontend calls the FastAPI backend (auth, HIPAA middleware and audit log, trust score, reminders, Groq narratives), which reads and writes PostgreSQL and the ML training and similar-patients modules](docs/architecture.webp)
 
----
+The diagram predates this series: narratives now go through a provider chain (Groq or Bedrock) and local checks,
+and training is the single `app.ml.train` script.
 
-## What It Adds
+## What it adds
 
-- **Explained predictions:** ensemble ML with SHAP attributions for every patient.
-- **Plain-English narratives:** an LLM turns de-identified SHAP output into a short summary, with a template fallback when the LLM is unavailable.
-- **Medication trust scoring:** a per-patient, per-medication behavioural signal that sets the reminder tier.
-- **Tiered reminders:** 15-minute, 5-minute, dose-due and 10-minutes-missed cycles.
-- **Clinician gate:** nothing is scheduled automatically; recommendations need clinician approval.
-- **De-identification before any LLM call:** names, birth date, address, ZIP and identifiers are stripped first.
-- **Open, deployable stack:** FastAPI, PostgreSQL, Railway and Vercel.
-
----
-
-## ML Architecture
-
-### Ensemble Models
-- **XGBoost + LightGBM** ensemble. The metrics below come from `train_standalone.py`, which generates its own 50,000 synthetic patients in memory; they are not from the 100K-patient Postgres cohort. A retrain from Postgres, with a calibration slice and a logistic regression baseline, is in progress
-- **True temporal train/test split**: oldest 80% of patients train the model, newest 20% are held out for evaluation — no future data leaks into training (an earlier version used random splits and hit AUC=1.0 due to data leakage; this was caught and corrected)
-
-### Prediction Horizons (Temporal Split, 50K In-Memory Synthetic Patients)
-| Model | AUC | Precision | Recall | F1 | Algorithm | Notes |
-|---|---|---|---|---|---|---|
-| ER Visit (30d) | 0.74 | 0.49 | 0.64 | 0.56 | LightGBM | Primary triage signal |
-| Care Need (90d) | 0.74 | 0.69 | 0.66 | 0.68 | LightGBM | Care coordination planning |
-| Care Need (30d) | 0.67 | 0.21 | 0.50 | 0.30 | LightGBM | Short-horizon intervention |
-| Adherence Trust Score | — | — | — | — | Behavioral | Per-patient, not predictive |
-
-> **Note**: Metrics above are from `train_standalone.py` on in-memory synthetic data with a true temporal split. They say nothing about performance on real patients.
-
-### Top Predictive Features (by importance)
-1. BMI
-2. Heart rate (avg)
-3. Response latency (avg time to take medication)
-4. Systolic blood pressure (avg)
-5. Adherence rate (90-day)
-
-### SHAP Explainability
-Every prediction surfaces per-patient feature attribution via SHAP values. The Groq-hosted LLM (default `openai/gpt-oss-120b`, set with `GROQ_MODEL`) converts SHAP output into plain-English clinical narratives — after PHI de-identification.
+- Time-honest risk models: train on older patients, choose and calibrate on the next slice, report once on the newest.
+- A logistic regression baseline next to XGBoost, LightGBM and their ensemble, with the decision threshold chosen on
+  held-out data.
+- Versioned model files that the API refuses to load if their sha256 does not match.
+- SHAP explanations for every prediction, and LLM narratives that are shown only if they agree with that SHAP output.
+- A medication trust score and tiered reminders (15 minutes, 5 minutes, due, 10 minutes missed).
+- A clinician gate: the system recommends, a clinician approves; demo accounts cannot approve.
+- An audit-log row for every read of patient data, enforced by a test.
 
 ---
 
-## Data Scale
+## ML
 
-- **100K synthetic patients** with 5 years of longitudinal data, in the local development database
-- **215M+ adherence events** generated across that cohort
-- The hosted demo runs on a small synthetic subset
-- PostgreSQL 16 with async SQLAlchemy ORM and indexed lookups
-- Risk scores pre-computed at startup; no per-request ML inference on patient lists (eliminates timeout risk)
+### Data and labels
 
----
+- Postgres tables seeded by `app.data.ingest_synthea` (Synthea CSVs, or `--fallback` for generated patients).
+- Index date = latest encounter minus 90 days. Features (17: demographics, insurance, diagnosis and medication
+  counts, adherence now and a year earlier, response latency, vitals) use only events before it; labels use the
+  30 or 90 days after it: `er_visit_30d`, `care_need_30d`, `care_need_90d`.
 
-## Privacy Controls (HIPAA-aligned)
+### Splits, models, calibration
 
-These are design controls, not a compliance claim: a real deployment would also need a business associate agreement, a risk assessment and written policies.
-
-- Every read of patient data writes an audit-log row (user, role, patient, time); [a test](backend/tests/test_audit_coverage.py) fails if a route forgets
-- De-identification strips names, date of birth, address, ZIP and identifiers before any LLM call
-- RBAC with 4 roles: Admin, Physician, Nurse, Care Coordinator
-- JWT authentication on every patient endpoint
-
----
-
-## Trust Score + Reminder Engine
-
-The trust score is a per-patient-per-medication behavioral signal computed from:
-- Adherence event history (taken / missed / late)
-- Pharmacy refill alignment (refill before or after depletion)
-- Streak patterns and dose timing variance
-
-Trust score drives reminder dispatch tier:
-- **High trust** → standard 15-min and 5-min pre-dose reminders
-- **Low trust** → escalated to clinician flag + 10-min post-miss alert
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend | FastAPI 0.115, Python 3.12, SQLAlchemy async |
-| Database | PostgreSQL 16 (Homebrew / Docker) |
-| ML | XGBoost, LightGBM, scikit-learn, SHAP |
-| LLM | Groq API (`openai/gpt-oss-120b` by default, `GROQ_MODEL` to change) |
-| Frontend | Next.js 15, React 19, Recharts, Tailwind CSS |
-| Auth | JWT RBAC |
-| CI/CD | GitHub Actions (lint, tests) |
-| Deploy | Railway (backend) + Vercel (frontend) |
-
----
-
-## Known Gaps (Planned Fixes)
-
-These are honest architectural limitations, not minor bugs:
-
-| Gap | Impact | Planned Fix |
-|---|---|---|
-| Frontend hydration error | Role read from `localStorage` during SSR causes client/server mismatch | Client-side guard with `useEffect` before reading localStorage |
-| HITL workflow frontend incomplete | Backend HITL endpoints exist; UI not wired up | Build clinician approval queue page |
-| Bias audit visualization missing | Admin page has no fairness chart | Add Recharts breakdown by race/ethnicity/archetype |
-| Search by patient UUID not implemented | Can only search by name | Add UUID search path to `/search` endpoint and frontend |
-| ORM-based bulk insert is slow | 150–200M rows via SQLAlchemy ORM takes 10+ hours | Replace with raw SQL `COPY` or `execute_many` bulk inserts |
-| No real patient data pipeline | Currently synthetic only | Integrate real Synthea FHIR export; add cloud BAA for PHI |
-| No encryption at rest | Database not encrypted | Add PostgreSQL TDE or cloud KMS |
-| Auth is JWT only | No SSO / enterprise login | Add OAuth2/OIDC for hospital system integration |
-
----
-
-## Local Setup
+- Patients sorted by time (first recorded encounter), cut 70/10/20 into train, calibration and test.
+- Candidates fitted on train: logistic regression (baseline), XGBoost, LightGBM, and the average of the two tree
+  models' log-odds.
+- On the calibration slice only: pick the best ROC-AUC, choose isotonic or sigmoid calibration by cross-validated
+  Brier (skipped, with the reason recorded, below 10 positives or negatives), and pick the F1-maximising threshold.
+- On the test slice, once: ROC-AUC, PR-AUC, precision, recall, F1, Brier, reliability bins and ECE.
 
 ```bash
-# 1. Start PostgreSQL
-/opt/homebrew/opt/postgresql@16/bin/pg_ctl -D /opt/homebrew/var/postgresql@16 start
+cd backend
+python -m app.ml.train                                # from Postgres (DATABASE_URL_SYNC)
+python -m app.ml.train --source memory --n 2000       # tiny in-memory run, no database
+python -m app.ml.report data/models/metrics.json      # print the tables below
+```
 
-# 2. Backend
+### Metrics (demo scale, synthetic)
+
+From [docs/metrics/postgres-demo-600.json](docs/metrics/postgres-demo-600.json): 600 patients seeded with
+`ingest_synthea --fallback --max-patients 600`, trained with `python -m app.ml.train` on 2026-11-27. Test slice:
+120 patients.
+
+| Target | Selected | ROC-AUC | PR-AUC | Brier | Threshold | Precision | Recall | F1 | Calibrated |
+|---|---|---|---|---|---|---|---|---|---|
+| er_visit_30d | logreg | 0.462 | 0.047 | 0.227 | 0.500 | 0.021 | 0.500 | 0.040 | no (0 positives in calibration slice) |
+| care_need_90d | logreg | 0.523 | 0.180 | 0.123 | 0.168 | 0.157 | 0.471 | 0.235 | yes, sigmoid (ECE 0.360 to 0.051) |
+| care_need_30d | logreg | 0.383 | 0.042 | 0.243 | 0.446 | 0.028 | 0.400 | 0.052 | no (3 positives in calibration slice) |
+
+Test ROC-AUC per candidate (logreg / XGBoost / LightGBM / ensemble): er_visit_30d 0.462 / 0.568 / 0.525 / 0.534,
+care_need_90d 0.523 / 0.427 / 0.399 / 0.404, care_need_30d 0.383 / 0.485 / 0.511 / 0.497.
+
+These are chance-level, and that is the honest result: the fallback generator draws encounters independently of
+every feature, so there is nothing to learn, and 2 to 17 test positives per target leave wide error bars.
+
+Sanity check that the pipeline does learn when there is signal, from
+[docs/metrics/memory-sanity-20k.json](docs/metrics/memory-sanity-20k.json)
+(`python -m app.ml.train --source memory --n 20000`, outcomes drawn from a logistic function of the features):
+test ROC-AUC 0.689 / 0.691 / 0.695 for the three targets, with sigmoid calibration lowering ECE to 0.014 / 0.021 /
+0.017. The logistic baseline wins there by 0.004 to 0.012, as expected for a logistic ground truth.
+
+Details, limits and the reliability numbers: [model card](docs/model-card.md).
+
+---
+
+## Narratives
+
+| Layer | What happens | Code |
+|---|---|---|
+| De-identification | Names, birth date, address, ZIP and IDs removed; insurance mapped to a fixed list | `middleware/hipaa.py`, `services/narratives.py` |
+| Guardrails (input) | Bedrock ApplyGuardrail on the prompt when `GUARDRAIL_ID` and `GUARDRAIL_VERSION` are set | `services/guardrails.py` |
+| Provider chain | `NARRATIVE_PROVIDER=groq` (default) or `bedrock`; the other is the fallback; then the template | `services/llm_providers.py` |
+| SHAP check | Every feature named must be in the patient's top 5 SHAP features, same direction, in size order; no out-of-model terms | `services/narrative_checks.py` |
+| Rules | Never dosing advice, a diagnosis or causal wording | `services/narrative_checks.py` |
+| Guardrails (output) | ApplyGuardrail on the narrative | `services/guardrails.py` |
+| Cache and caps | Keyed by patient, model version and provider; daily caps on Bedrock and Guardrails calls | `services/narratives.py`, `services/guardrails.py` |
+| Clinician gate | Narratives never act; scheduling needs a clinician through `/schedule/{id}/action` | `main.py` |
+
+Any "no" returns the template, which is built from the same SHAP list. The response says which one you got
+(`narrative_source`).
+
+CI runs an [llm-eval-kit](https://github.com/SushantTusharJoshi/llm-eval-kit) suite
+([backend/evals/](backend/evals/)) on every pull request: strict safety and SHAP cases plus quality cases within a
+tolerance, with the mock provider, and a seeded-bad suite that must fail. With a `GROQ_API_KEY` secret it also runs
+the suite on Groq.
+
+Status: Groq, Bedrock and Guardrails are tested with stubs (including botocore's Stubber); live calls are
+implemented but unverified.
+
+---
+
+## Privacy controls (HIPAA-aligned)
+
+Design controls, not a compliance claim: a real deployment would also need a business associate agreement, a risk
+assessment and written policies.
+
+- Every read of patient data writes an audit-log row (user, role, patient, time); [a test](backend/tests/test_audit_coverage.py) fails if a route forgets.
+- De-identification before any LLM call, and a fixed list for the only free-text field that reaches a prompt.
+- RBAC with four roles (admin, physician, nurse, coordinator); demo accounts are view-only for actions.
+- JWT on every patient endpoint; CORS with credentials only for `FRONTEND_URL`; generic error bodies.
+
+Model card: [docs/model-card.md](docs/model-card.md). Security findings and status: [SECURITY.md](SECURITY.md).
+
+---
+
+## Run locally
+
+```bash
+# Postgres 16 (Docker or Homebrew), then:
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # fill in DB credentials and GROQ_API_KEY
-uvicorn app.main_pg:app --reload --port 8000
+cp .env.example .env                                   # DATABASE_URL, DATABASE_URL_SYNC, JWT_SECRET
+python -m app.data.ingest_synthea --fallback --max-patients 600
+python -m app.ml.train
+uvicorn app.main:app --reload --port 8000
 
-# 3. Frontend
-cd frontend
-npm install
-npm run dev
+cd ../frontend && npm ci && npm run dev                # http://localhost:3000
+python -m pytest -q                                    # from backend/
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Demo logins (username = password) are on outside production: `admin`, `physician`, `dr.patel`, `nurse`,
+`rn.williams`, `coordinator`. In production they are off unless `DEMO_LOGINS=true`, and they can view but not
+approve, override, create patients or read the audit log. Real accounts go in `AUTH_USERS` as bcrypt hashes:
 
-### Demo Logins
-Demo accounts use the username as the password and exist only when demo logins are on. They are on by default outside production. In production (`ENVIRONMENT=production`) they are off, and the backend refuses to start while any password-equals-username account or the default `JWT_SECRET` is active.
+```bash
+python -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('your-password'))"
+# AUTH_USERS={"dr.kim": {"password_hash": "$2b$12$...", "role": "physician", "name": "Dr. Kim"}}
+```
 
-- Real accounts: set `AUTH_USERS` to a JSON object of bcrypt hashes, for example `{"dr.kim": {"password_hash": "$2b$12$...", "role": "physician", "name": "Dr. Kim"}}`. Generate a hash with `python -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('your-password'))"`.
-- Public synthetic-data demo: set `DEMO_LOGINS=true` explicitly. Hide the quick-login buttons with `NEXT_PUBLIC_DEMO_LOGINS=false` on the frontend.
+## Deploy on Railway
 
-| Username | Password | Role |
-|---|---|---|
-| admin | admin | Admin |
-| physician | physician | Physician |
-| nurse | nurse | Nurse |
-| coordinator | coordinator | Care Coordinator |
-| dr.patel | dr.patel | Physician |
-| rn.williams | rn.williams | Nurse |
+- The backend image is `backend/Dockerfile`; it starts `uvicorn app.main:app` (`app.main_pg:app` still works as an
+  alias).
+- Variables: `DATABASE_URL`, `DATABASE_URL_SYNC`, `JWT_SECRET`, `ENVIRONMENT=production`,
+  `FRONTEND_URL=https://predictive-care.vercel.app`, `DEMO_LOGINS=true` for the public demo, `GROQ_API_KEY`.
+  Optional: `NARRATIVE_PROVIDER`, `BEDROCK_MODEL_ID`, `AWS_REGION`, `GUARDRAIL_ID`, `GUARDRAIL_VERSION`,
+  `BEDROCK_DAILY_CAP`, `GUARDRAIL_DAILY_CAP`, `MODEL_S3_URI`, `MODEL_VERSION`. AWS policy: [infra/aws/](infra/aws/README.md).
+- After this series is merged, retrain on Railway with the new script, `python -m app.ml.train`. The API no longer
+  loads the old unhashed `models.pkl`, so predictions show "Models not loaded" until then. `/health` reports
+  `models_loaded` and `model_version`.
 
 ---
 
-## GitHub
+## Code map
 
-[github.com/SushantTusharJoshi/predictive-care](https://github.com/SushantTusharJoshi/predictive-care)
+Each function below has a `# What it does` / `# Catch it` / `# Card` header and `# STEP` / `# LOOP` / `# DECISION` /
+`# RETURN` comments matching the boxes in its card's flowchart ([a test](backend/tests/test_cards.py) checks this).
+
+| Box | File | The move |
+|---|---|---|
+| Time split | [ml/train.py](backend/app/ml/train.py) `time_split` | Sort by patient time, cut 70/10/20, newest last ([card](docs/cards/time-split.md)) |
+| One target | [ml/train.py](backend/app/ml/train.py) `train_target` | Choose, calibrate and threshold on calibration; read test once ([card](docs/cards/train-target.md)) |
+| Calibration | [ml/train.py](backend/app/ml/train.py) `fit_calibration` | Isotonic or sigmoid by CV Brier, or skip and say why ([card](docs/cards/calibration.md)) |
+| Model file | [ml/artifacts.py](backend/app/ml/artifacts.py) `load_bundle` | Hash the bytes, compare, only then unpickle ([card](docs/cards/verified-artifact.md)) |
+| SHAP check | [services/narrative_checks.py](backend/app/services/narrative_checks.py) `check_shap` | Each named feature: in top 5, same sign, in size order ([card](docs/cards/shap-check.md)) |
+| Narrative chain | [services/narratives.py](backend/app/services/narratives.py) `narrate` | Cache, Guardrails, provider then fallback, checks; template on any no ([card](docs/cards/narrative-chain.md)) |
+| Yes-streak | [services/trust_score.py](backend/app/services/trust_score.py) `consecutive_yes_streak` | One pass, reset on a miss ([card](docs/cards/yes-streak.md)) |
+| Role check | [services/auth.py](backend/app/services/auth.py) `require_role` | Role allowed, then action permission with the demo flag ([card](docs/cards/rbac-demo.md)) |
+
+## Known limits
+
+| Limit | Impact |
+|---|---|
+| Synthetic data with no feature-outcome link in the fallback generator | Demo metrics are chance-level; nothing here says how the model would do on real patients |
+| Small demo cohort | Calibration is skipped for two of three targets; test metrics have wide error bars |
+| Fairness not measured by group yet | No per-group error rates in the model card |
+| Narrative cache, daily caps and rate limits are in-process | Each worker counts separately; restarts reset them |
+| Live Groq, Bedrock and Guardrails calls unverified | Only stub-tested until a key and Bedrock access exist |
+| Clinician approval queue has no page yet | Approval works through the API only |
+| Search treats any 4+ character hex string as a patient-ID prefix | A name made only of the letters a to f is searched as an ID |
+| JWT in `localStorage`, no MFA or SSO | See [SECURITY.md](SECURITY.md) |
+| Ingest uses ORM inserts | Large cohorts (100K patients) take hours to load |
