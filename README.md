@@ -30,6 +30,8 @@ flowchart LR
   GR --> CHK["narrative_checks.py<br/>SHAP direction and order, safety rules"]
   CHK -->|fails or outage| TPL["template narrative"]
   CI["GitHub Actions<br/>lint, test, narrative-eval with llm-eval-kit"] -.gates.-> API
+  API --> OPS["ops routes: drift, retrain<br/>machine token; PSI, verified hot-swap"]
+  OPS --> TRAIN
 ```
 
 Drawn from the code in `backend/app`: every box is a module, and every arrow is a call in it.
@@ -191,21 +193,75 @@ python -c "from passlib.context import CryptContext; print(CryptContext(schemes=
 # AUTH_USERS={"dr.kim": {"password_hash": "$2b$12$...", "role": "physician", "name": "Dr. Kim"}}
 ```
 
-## Deploy on Railway
+## Monitoring
+
+`GET /ops/drift` compares today's population with the training baseline. Training writes the baseline into
+`metrics.json` (`drift_baseline`): decile bin edges and shares for every model feature (train slice) and for each
+target's predicted score (held-out test slice). The endpoint rebuilds the features with the training SQL as of today
+(newest `DRIFT_MAX_PATIENTS`, default 20,000), scores them with the loaded models, and returns:
+
+- `features` and `scores`: PSI per item, `PSI = sum((live - base) * ln(live / base))` over the same bins, each with a
+  status: `ok` under 0.1, `watch` 0.1 to 0.25, `drift` above 0.25. `top` lists the five largest.
+- `status`: the worst item (`unknown` with a `reason` when the loaded metrics have no baseline; retrain once to add it).
+- `overrides`: clinician overrides from `hitl_actions` (total, last 30 days) and how often the recorded model score
+  and the clinician's score sit on the same side of the model's threshold, per target.
+- `model_version`, `n_live`, `generated_at`. Each call writes an audit-log row (`view_drift`).
+
+[monitor.yml](.github/workflows/monitor.yml) calls it nightly (and by hand), writes the table to the job summary,
+opens or updates the one open issue labelled `drift` when the status is `drift`, and then runs the retrain workflow.
+
+## Retraining
+
+`POST /ops/retrain` runs the same pipeline as `python -m app.ml.train` in a background thread and answers 202 with a
+`run_id`; a second request while one runs gets 409. When training finishes, the new artifact is loaded back through
+the hash check, and its hash must equal the one training computed. Only then are the served models swapped in place
+(no restart, `/health` shows the new `model_version`). If anything fails, the previous `current.json` and
+`metrics.json` are put back, so a restart still loads the old model. `GET /ops/retrain` returns the last run
+(`state`, `previous_version`, `new_version`, `verified`, `swapped`, `error`); it is also kept in
+`retrain-status.json` on the volume, and a run cut off by a restart reads as failed. With `MODEL_VERSION` pinned the
+new model is verified but not swapped. One run per process: keep the API at one worker (the Dockerfile runs one).
+
+PC-F6, clinician overrides: they are an evaluation feedback set, never training labels, until there are at least 200
+(`MIN_OVERRIDES_FOR_LABELS` in [ml/feedback.py](backend/app/ml/feedback.py)). Each training run scores the patients
+behind the overrides with the new model and records the agreement in `metrics.json` (`override_feedback`, with the
+rule and the count). Reaching 200 only marks them eligible; turning them into labels is a separate, reviewed change,
+because an override is a clinician's risk estimate, not an observed outcome.
+
+[retrain.yml](.github/workflows/retrain.yml) runs weekly (and by hand, and from the monitor on drift): it starts a
+run, polls until it ends, and fails the job if the run failed or the new model did not verify.
+
+Both `/ops` routes take a machine token, never a user JWT: `Authorization: Bearer $OPS_TOKEN`, compared in constant
+time. Without `OPS_TOKEN` they return 503. Generate one with `openssl rand -hex 32`.
+
+## Deploy
 
 - The backend image is `backend/Dockerfile`; it starts `uvicorn app.main:app` (`app.main_pg:app` still works as an
-  alias).
+  alias). The Railway service `predictive-care-api` has its root directory set to `backend`.
 - Variables: `DATABASE_URL`, `DATABASE_URL_SYNC`, `JWT_SECRET`, `ENVIRONMENT=production`,
-  `FRONTEND_URL=https://predictive-care.vercel.app`, `DEMO_LOGINS=true` for the public demo, `GROQ_API_KEY`.
+  `FRONTEND_URL=https://predictive-care.vercel.app`, `DEMO_LOGINS=true` for the public demo, `GROQ_API_KEY`,
+  `OPS_TOKEN` for `/ops`. The models volume is mounted at `/app/data/models`, the default `MODEL_DIR`.
   Optional: `NARRATIVE_PROVIDER`, `BEDROCK_MODEL_ID`, `AWS_REGION`, `GUARDRAIL_ID`, `GUARDRAIL_VERSION`,
-  `BEDROCK_DAILY_CAP`, `GUARDRAIL_DAILY_CAP`, `MODEL_S3_URI`, `MODEL_VERSION`. AWS policy: [infra/aws/](infra/aws/README.md).
-- Deploys run from `main` only after the required checks (lint, test, narrative-eval) pass. Railway cannot read
-  this repo directly, so the deploy is a manual `railway up` from `main`, not an automatic one.
+  `BEDROCK_DAILY_CAP`, `GUARDRAIL_DAILY_CAP`, `MODEL_S3_URI`, `MODEL_VERSION`, `DRIFT_MAX_PATIENTS`. AWS policy:
+  [infra/aws/](infra/aws/README.md).
+- Deploys are automatic: [deploy.yml](.github/workflows/deploy.yml) runs when the CI workflow (lint, test,
+  narrative-eval) succeeds for a push to `main`, or by hand from `main`. It checks out the commit CI passed, installs
+  the Railway CLI, runs `railway up --service predictive-care-api --detach` from the repo root, waits for that
+  deployment to reach `SUCCESS`, then polls `/health` until it answers 200.
+- GitHub settings for the workflows:
+
+  | Workflow | Secrets | Variables |
+  |---|---|---|
+  | deploy.yml | `RAILWAY_TOKEN` (a Railway project token for production) | `API_BASE` |
+  | monitor.yml | `OPS_TOKEN` (same value as on Railway) | `API_BASE` |
+  | retrain.yml | `OPS_TOKEN` | `API_BASE` |
+
+  `API_BASE` is the public API address, for example `https://<service>.up.railway.app`. Each workflow skips with a
+  notice when its secret is missing.
 - To plant the outcome signal in an existing database without regenerating it, run once in the backend
   service: `python -m app.data.rearrange_outcomes --dry-run` (writes nothing), then
   `python -m app.data.rearrange_outcomes`, then retrain. A second run changes 0 rows.
-- After this series is merged, retrain on Railway with the new script, `python -m app.ml.train`. The API no longer
-  loads the old unhashed `models.pkl`, so predictions show "Models not loaded" until then. `/health` reports
+- The API only loads a hashed `models-<version>.pkl` named in `current.json`; until one exists, predictions show
+  "Models not loaded". `POST /ops/retrain` (or `python -m app.ml.train` in the service) creates it. `/health` reports
   `models_loaded` and `model_version`.
 
 ---
@@ -239,6 +295,8 @@ Each function below has a `# What it does` / `# Catch it` / `# Card` header and 
 | Live Bedrock and Guardrails calls unverified; the app's Groq client is stub-tested | Groq prompts were run live only through the CI eval |
 | JWT in `localStorage`, no MFA or SSO | See [SECURITY.md](SECURITY.md) |
 | Ingest uses ORM inserts | Large cohorts (100K patients) take hours to load |
+| Retraining runs inside the API process | Requests slow down while it trains; one worker only, or two runs could overlap |
+| Drift is measured as of today | A synthetic database whose events stopped in the past drifts on the 90-day features, and retraining on the same data will not clear it |
 
 ## About the coder
 

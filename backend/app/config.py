@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     model_dir: str = "data/models"
     # Pin a model version (models-<version>.pkl); empty = the one named in current.json
     model_version: str = ""
+    # Machine token for /ops/drift and /ops/retrain (Authorization: Bearer). Unset = those routes return 503.
+    ops_token: str = ""
+    # Newest N patients in the live drift sample
+    drift_max_patients: int = 20000
     hipaa_audit_enabled: bool = True
     session_timeout_minutes: int = 30
 

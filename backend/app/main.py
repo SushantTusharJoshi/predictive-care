@@ -36,7 +36,13 @@ from app.data.database_pg import (
     search_patients,
 )
 from app.middleware.hipaa import HipaaAuditMiddleware
-from app.services.auth import authenticate, check_default_credentials, create_token, require_role
+from app.services.auth import (
+    authenticate,
+    check_default_credentials,
+    create_token,
+    require_ops_token,
+    require_role,
+)
 from app.services.create_patient import create_patient
 from app.services.narratives import longitudinal_narrative_result, shap_narrative_result
 from app.services.reminders import (
@@ -55,6 +61,8 @@ FEATURE_COLS = []
 METRICS = {}
 KNN_INDEX = None
 MODEL_INFO = {"version": None, "sha256": None}
+DRIFT_BASELINE = {}
+RETRAINER = None
 
 
 def metrics_view(metrics: dict) -> dict:
@@ -82,9 +90,29 @@ def metrics_view(metrics: dict) -> dict:
     return view
 
 
+def apply_bundle(bundle: dict, metrics: dict, manifest: dict):
+    """Serve a verified bundle: at startup, and as the hot-swap after a verified retrain.
+
+    MODELS is updated in place without emptying it first, so a request during the
+    swap sees the old or the new model, never no model.
+    """
+    global KNN_INDEX
+    new_models = bundle["models"]
+    MODELS.update(new_models)
+    for name in [n for n in MODELS if n not in new_models]:
+        del MODELS[name]
+    FEATURE_COLS[:] = bundle["feature_cols"]
+    METRICS.clear()
+    METRICS.update(metrics_view(metrics))
+    DRIFT_BASELINE.clear()
+    DRIFT_BASELINE.update(metrics.get("drift_baseline") or {})
+    KNN_INDEX = bundle.get("knn")
+    MODEL_INFO.update(version=manifest["version"], sha256=manifest["sha256"])
+    logger.info("Loaded models %s (%s)", manifest["version"], ", ".join(MODELS))
+
+
 def load_models():
     """Load the versioned bundle only if its sha256 matches the manifest (PC-N12)."""
-    global KNN_INDEX
     from pathlib import Path
 
     from app.ml import artifacts
@@ -98,14 +126,20 @@ def load_models():
     except artifacts.ArtifactError as e:
         logger.error("Models not loaded: %s", e)
         return
-    MODELS.clear()
-    MODELS.update(bundle["models"])
-    FEATURE_COLS[:] = bundle["feature_cols"]
-    METRICS.clear()
-    METRICS.update(metrics_view(metrics))
-    KNN_INDEX = bundle.get("knn")
-    MODEL_INFO.update(version=manifest["version"], sha256=manifest["sha256"])
-    logger.info("Loaded models %s (%s)", manifest["version"], ", ".join(MODELS))
+    apply_bundle(bundle, metrics, manifest)
+
+
+def get_retrainer():
+    """One Retrainer per process; it runs `python -m app.ml.train`'s main() in a thread."""
+    global RETRAINER
+    if RETRAINER is None:
+        from app.ml import train
+        from app.ml.retrain import Retrainer
+
+        RETRAINER = Retrainer(settings.model_dir, train_fn=lambda: train.main(["--model-dir", settings.model_dir]),
+                              apply_fn=apply_bundle, current_version=lambda: MODEL_INFO["version"],
+                              pinned_version=settings.model_version)
+    return RETRAINER
 
 
 @asynccontextmanager
@@ -513,6 +547,62 @@ async def hipaa_data_flow(user=Depends(require_role(["admin"]))):
             {"step": 8, "name": "Audit Trail", "description": "All actions persisted to audit_log with patient_id_accessed."},
         ],
     }
+
+
+# ━━━ Ops: drift and retraining (machine token only) ━━━
+def _drift_report() -> dict:
+    """Runs in a worker thread: live features and overrides come from the sync engine."""
+    from app.ml import drift, feedback
+
+    models = {t: e["model"] for t, e in dict(MODELS).items() if e.get("model")}
+    cols, baseline = list(FEATURE_COLS), dict(DRIFT_BASELINE)
+    thresholds = {t: float(getattr(m, "threshold", 0.5)) for t, m in models.items()}
+    out = {"model_version": MODEL_INFO["version"], "generated_at": datetime.now(UTC).isoformat(),
+           "bands": {"ok": "< 0.1", "watch": "0.1 to 0.25", "drift": "> 0.25"},
+           "overrides": feedback.live_agreement(feedback.load_overrides(), thresholds)}
+    if not baseline:
+        return {**out, "status": "unknown", "reason": "metrics.json has no drift baseline; retrain to add one"}
+    live = drift.load_live(limit=settings.drift_max_patients)
+    if live.empty:
+        return {**out, "status": "unknown", "reason": "no live patients"}
+    X = live[cols]
+    scores = {t: m.predict_proba(X)[:, 1] for t, m in models.items()}
+    return {**out, **drift.drift_report(baseline, X, scores), "n_live": len(live)}
+
+
+@app.get("/ops/drift")
+@limiter.limit("10/minute")
+async def ops_drift(request: Request, ops=Depends(require_ops_token)):
+    """PSI per feature and per predicted score against the training baseline, plus overrides."""
+    if not MODELS or not FEATURE_COLS:
+        raise HTTPException(503, "Models not loaded")
+    report = await asyncio.to_thread(_drift_report)
+    await log_audit(ops["username"], ops["role"], "view_drift", "ops/drift",
+                    details={"status": report["status"], "model_version": report["model_version"]})
+    return report
+
+
+@app.post("/ops/retrain", status_code=202)
+@limiter.limit("5/minute")
+async def ops_retrain(request: Request, trigger: Literal["api", "schedule", "drift", "manual"] = "api",
+                      ops=Depends(require_ops_token)):
+    """Start the training pipeline in a background thread; 409 while one is running."""
+    run = get_retrainer().start(trigger=trigger)
+    if run is None:
+        raise HTTPException(409, "A retrain is already running")
+    await log_audit(ops["username"], ops["role"], "start_retrain", "ops/retrain",
+                    details={"run_id": run["run_id"], "trigger": trigger})
+    return run
+
+
+@app.get("/ops/retrain")
+@limiter.limit("30/minute")
+async def ops_retrain_status(request: Request, ops=Depends(require_ops_token)):
+    """The last (or current) retrain run: state, versions, verified, swapped."""
+    status = get_retrainer().status()
+    await log_audit(ops["username"], ops["role"], "view_retrain_status", "ops/retrain",
+                    details={"run_id": status.get("run_id"), "state": status["state"]})
+    return status
 
 
 # ━━━ ML helpers ━━━
