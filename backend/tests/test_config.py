@@ -33,3 +33,10 @@ class TestSettings:
         )
         assert s.hipaa_audit_enabled is True
         assert s.session_timeout_minutes == 30
+
+
+class TestNoPasswordInCode:
+    def test_default_database_urls_carry_no_password(self):
+        s = Settings()
+        assert ":" not in s.database_url.split("//", 1)[1].split("@", 1)[0]
+        assert ":" not in s.database_url_sync.split("//", 1)[1].split("@", 1)[0]

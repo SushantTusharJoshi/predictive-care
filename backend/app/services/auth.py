@@ -68,6 +68,11 @@ def check_default_credentials(cfg=settings, users=None):
     if not users:
         logger.warning("No users configured. Set AUTH_USERS or DEMO_LOGINS=true.")
 
+    if cfg.environment == "production" and any(
+        host in getattr(cfg, "database_url", "") for host in ("@localhost", "@127.0.0.1")
+    ):
+        raise RuntimeError("DATABASE_URL points at localhost in production. Set it to the hosted database.")
+
     if JWT_SECRET == "dev-secret-change-in-prod":
         if cfg.environment == "production":
             raise RuntimeError("JWT_SECRET is the default value. Set a strong secret before running in production.")

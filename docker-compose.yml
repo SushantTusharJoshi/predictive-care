@@ -7,9 +7,9 @@ services:
     environment:
       POSTGRES_DB: predictive_care
       POSTGRES_USER: pc_user
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-pc_local_dev_2024}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -24,10 +24,10 @@ services:
       dockerfile: Dockerfile
     container_name: pc-backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://pc_user:${DB_PASSWORD:-pc_local_dev_2024}@db:5432/predictive_care
-      DATABASE_URL_SYNC: postgresql://pc_user:${DB_PASSWORD:-pc_local_dev_2024}@db:5432/predictive_care
+      DATABASE_URL: postgresql+asyncpg://pc_user:${DB_PASSWORD:?Set DB_PASSWORD in .env}@db:5432/predictive_care
+      DATABASE_URL_SYNC: postgresql://pc_user:${DB_PASSWORD:?Set DB_PASSWORD in .env}@db:5432/predictive_care
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
@@ -44,9 +44,9 @@ services:
     container_name: pc-pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@predictivecare.dev
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-change-me-local}
     ports:
-      - "5050:80"
+      - "127.0.0.1:5050:80"
     depends_on:
       - db
     profiles:

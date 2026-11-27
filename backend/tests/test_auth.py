@@ -135,6 +135,13 @@ class TestProductionCredentials:
                 pytest.raises(RuntimeError, match="JWT_SECRET"):
             check_default_credentials(cfg, {})
 
+    def test_refuses_localhost_database_in_production(self):
+        cfg = _cfg(environment="production", demo_logins=True,
+                   database_url="postgresql+asyncpg://pc_user@localhost:5432/predictive_care")
+        with patch("app.services.auth.JWT_SECRET", "a-real-secret"), \
+                pytest.raises(RuntimeError, match="localhost"):
+            check_default_credentials(cfg, build_users(cfg))
+
     def test_auth_users_loaded_from_hashes(self):
         cfg = _cfg(environment="production", auth_users=json.dumps(
             {"dr.kim": {"password_hash": pwd_ctx.hash("s3cure-pass"), "role": "physician", "name": "Dr. Kim"}}))
