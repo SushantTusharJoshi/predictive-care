@@ -13,10 +13,26 @@ Live demo: [predictive-care.vercel.app](https://predictive-care.vercel.app)
 
 ## Architecture
 
-![PredictiveCare architecture: Next.js frontend calls the FastAPI backend (auth, HIPAA middleware and audit log, trust score, reminders, Groq narratives), which reads and writes PostgreSQL and the ML training and similar-patients modules](docs/architecture.webp)
+```mermaid
+flowchart LR
+  UI["Next.js frontend<br/>predictive-care.vercel.app"] -->|JWT| API["FastAPI app.main"]
+  API --> AUTH["auth.py<br/>roles, view-only demo accounts"]
+  API --> AUDIT["middleware<br/>audit_log on every PHI read"]
+  API --> DB[("PostgreSQL<br/>synthetic patients")]
+  API --> RISK["risk_model.py<br/>3 targets + per-patient SHAP"]
+  RISK --> ART["artifacts.py<br/>sha256 checked before load"]
+  TRAIN["ml/train.py<br/>time-ordered train / calibration / test"] --> ART
+  DB --> TRAIN
+  API --> NAR["narratives.py"]
+  NAR --> CACHE["cache<br/>patient + model version + provider"]
+  NAR --> PROV["llm_providers.py<br/>Groq, then Bedrock"]
+  PROV --> GR["guardrails.py<br/>ApplyGuardrail in and out"]
+  GR --> CHK["narrative_checks.py<br/>SHAP direction and order, safety rules"]
+  CHK -->|fails or outage| TPL["template narrative"]
+  CI["GitHub Actions<br/>lint, test, narrative-eval with llm-eval-kit"] -.gates.-> API
+```
 
-The diagram predates this series: narratives now go through a provider chain (Groq or Bedrock) and local checks,
-and training is the single `app.ml.train` script.
+Drawn from the code in `backend/app`: every box is a module, and every arrow is a call in it.
 
 ## What it adds
 
@@ -162,6 +178,8 @@ python -c "from passlib.context import CryptContext; print(CryptContext(schemes=
   `FRONTEND_URL=https://predictive-care.vercel.app`, `DEMO_LOGINS=true` for the public demo, `GROQ_API_KEY`.
   Optional: `NARRATIVE_PROVIDER`, `BEDROCK_MODEL_ID`, `AWS_REGION`, `GUARDRAIL_ID`, `GUARDRAIL_VERSION`,
   `BEDROCK_DAILY_CAP`, `GUARDRAIL_DAILY_CAP`, `MODEL_S3_URI`, `MODEL_VERSION`. AWS policy: [infra/aws/](infra/aws/README.md).
+- Deploys run from `main` only after the required checks (lint, test, narrative-eval) pass. Railway cannot read
+  this repo directly, so the deploy is a manual `railway up` from `main`, not an automatic one.
 - After this series is merged, retrain on Railway with the new script, `python -m app.ml.train`. The API no longer
   loads the old unhashed `models.pkl`, so predictions show "Models not loaded" until then. `/health` reports
   `models_loaded` and `model_version`.
@@ -195,3 +213,8 @@ Each function below has a `# What it does` / `# Catch it` / `# Card` header and 
 | Live Bedrock and Guardrails calls unverified; the app's Groq client is stub-tested | Groq prompts were run live only through the CI eval |
 | JWT in `localStorage`, no MFA or SSO | See [SECURITY.md](SECURITY.md) |
 | Ingest uses ORM inserts | Large cohorts (100K patients) take hours to load |
+
+## About the coder
+
+Built by [Sushant Joshi](https://github.com/SushantTusharJoshi), an AI engineer. The narrative eval gate here uses
+[llm-eval-kit](https://github.com/SushantTusharJoshi/llm-eval-kit), another of my repos.
