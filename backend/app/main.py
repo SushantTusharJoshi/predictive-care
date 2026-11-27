@@ -430,6 +430,33 @@ async def reminders(request: Request, patient_id: str,
 
 
 # ━━━ Similar Patients ━━━
+SIMILAR_ADHERENCE_SQL = """
+    SELECT patient_id::text AS pid, 100.0 * AVG(CASE WHEN taken THEN 1 ELSE 0 END) AS pct
+    FROM adherence_events
+    WHERE patient_id::text = ANY(:ids)
+      AND event_date >= (SELECT MAX(event_date) FROM adherence_events) - 90
+    GROUP BY patient_id
+"""
+
+
+async def _fill_similar_adherence(similar: list, prediction: dict) -> None:
+    """Real 90-day adherence for each similar patient, anchored on the data's latest date like the features."""
+    ids = [str(s.get("patient_id")) for s in similar if s.get("patient_id")]
+    if not ids:
+        return
+    from sqlalchemy import text as sql_text
+
+    from app.data.database_pg import get_async_session_factory
+    async with get_async_session_factory()() as session:
+        rows = (await session.execute(sql_text(SIMILAR_ADHERENCE_SQL), {"ids": ids})).all()
+    pct = {r.pid: round(float(r.pct), 1) for r in rows if r.pct is not None}
+    for s in similar:
+        s["avg_adherence_pct"] = pct.get(str(s.get("patient_id")))
+    known = [v for v in pct.values()]
+    if prediction and known:
+        prediction["predicted_adherence_rate"] = round(sum(known) / len(known), 1)
+
+
 @app.get("/patients/{patient_id}/similar")
 @limiter.limit("30/minute")
 async def similar_patients(request: Request, patient_id: str,
@@ -441,6 +468,7 @@ async def similar_patients(request: Request, patient_id: str,
     if not detail: raise HTTPException(404, "Patient not found")
     similar = find_similar_patients(patient_id, k=k, knn_data=KNN_INDEX)
     prediction = predict_from_similar(similar) if similar else {}
+    await _fill_similar_adherence(similar, prediction)
     await log_audit(user["username"], user["role"], "view_similar", patient_id, patient_id=patient_id)
     return {"similar_patients": similar, "predicted_behavior": prediction}
 
