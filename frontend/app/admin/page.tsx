@@ -75,7 +75,7 @@ export default function AdminPage() {
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--tx3)' }}>Loading...</div>
         ) : (
           <>
-            {tab === 'bias' && <BiasAuditTab data={biasData} />}
+            {tab === 'bias' && <BiasAuditTab data={biasData} metrics={metrics} />}
             {tab === 'models' && <ModelMetricsTab metrics={metrics} />}
             {tab === 'audit' && <AuditLogTab events={auditLog} />}
           </>
@@ -85,8 +85,60 @@ export default function AdminPage() {
   );
 }
 
-function BiasAuditTab({ data }: { data: any }) {
-  if (!data) return <div className="card" style={{ color: 'var(--tx3)' }}>No bias audit data available.</div>;
+function pct(v: number | null | undefined) {
+  return v === null || v === undefined ? 'n/a' : `${(v * 100).toFixed(1)}%`;
+}
+
+// PC-F7: per-archetype rates on the test slice, from the training run's metrics.json
+function FairnessByArchetype({ metrics }: { metrics: any }) {
+  const targets = Object.entries(metrics || {}).filter(([, info]: [string, any]) => info?.fairness?.groups);
+  if (!targets.length) return null;
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--tx3)', marginBottom: 4 }}>Model error rates by adherence archetype (test slice)</h3>
+      <p style={{ color: 'var(--tx3)', fontSize: 12, marginBottom: 12 }}>
+        Synthetic demo data. Groups with fewer than {(targets[0][1] as any).fairness.min_positives_for_rates} positives
+        or negatives are marked; their rates are too noisy to compare.
+      </p>
+      {targets.map(([name, info]: [string, any]) => (
+        <div key={name} style={{ marginBottom: 16, overflowX: 'auto' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+            {name.replace(/_/g, ' ')} <span style={{ color: 'var(--tx3)', fontWeight: 400 }}>threshold {info.fairness.threshold}</span>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                {['Archetype', 'Patients', 'Positives', 'Observed', 'Mean predicted', 'Flagged', 'Recall', 'False positive rate', 'ROC-AUC', ''].map(h => (
+                  <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--tx3)', fontSize: 11, fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {info.fairness.groups.map((g: any) => (
+                <tr key={g.group} style={{ borderBottom: '1px solid var(--border)', opacity: g.enough_data ? 1 : 0.6 }}>
+                  <td style={{ padding: '6px 10px', textTransform: 'capitalize' }}>{g.group}</td>
+                  <td style={{ padding: '6px 10px' }}>{g.n}</td>
+                  <td style={{ padding: '6px 10px' }}>{g.positives}</td>
+                  <td style={{ padding: '6px 10px' }}>{pct(g.observed_rate)}</td>
+                  <td style={{ padding: '6px 10px' }}>{pct(g.mean_predicted)}</td>
+                  <td style={{ padding: '6px 10px' }}>{pct(g.flagged_rate)}</td>
+                  <td style={{ padding: '6px 10px' }}>{pct(g.recall)}</td>
+                  <td style={{ padding: '6px 10px' }}>{pct(g.false_positive_rate)}</td>
+                  <td style={{ padding: '6px 10px' }}>{g.roc_auc ?? 'n/a'}</td>
+                  <td style={{ padding: '6px 10px', color: 'var(--tx3)', fontSize: 11 }}>{g.enough_data ? '' : 'too few cases'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BiasAuditTab({ data, metrics }: { data: any; metrics: any }) {
+  if (!data && !metrics) return <div className="card" style={{ color: 'var(--tx3)' }}>No bias audit data available.</div>;
+  if (!data) return <FairnessByArchetype metrics={metrics} />;
 
   const archDist = data.archetype_distribution || [];
   const chartData = archDist.map((r: any) => ({ name: r.group, patients: r.count, pct: parseFloat(r.pct) }));
@@ -101,6 +153,8 @@ function BiasAuditTab({ data }: { data: any }) {
           systemic biases in data collection, model predictions, or care delivery patterns.
         </p>
       </div>
+
+      <FairnessByArchetype metrics={metrics} />
 
       {/* Archetype Distribution Chart */}
       {chartData.length > 0 && (

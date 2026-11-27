@@ -153,10 +153,25 @@ function OverviewTab({ patient }: { patient: any }) {
 
 function PredictionsTab({ patient, narrative, onNarrative }: { patient: any; narrative: any; onNarrative: (t: string) => void }) {
   const preds = patient.predictions || {};
+  const [queued, setQueued] = useState('');
   if (preds.error) return <div className="card"><div style={{ color: 'var(--red)' }}>Error: {preds.error}</div></div>;
+
+  // PC-F5: suggest a follow-up; it waits on the Approvals page for a clinician
+  const queueFollowUp = async () => {
+    try {
+      await api(`/patients/${patient.patient_id}/schedule-recommendation`, { method: 'POST' });
+      setQueued('Follow-up queued for clinician approval (see Approvals).');
+    } catch { setQueued('Could not queue a follow-up.'); }
+  };
 
   return (
     <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={queueFollowUp}>
+          Suggest follow-up
+        </button>
+        {queued && <span style={{ fontSize: 13, color: 'var(--tx3)' }}>{queued}</span>}
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16 }}>
         {Object.entries(preds).map(([name, info]: [string, any]) => (
           <div key={name} className="card">

@@ -30,6 +30,7 @@ from app.data.database_pg import (
     get_patient_detail,
     get_patient_features,
     init_db,
+    list_pending_recommendations,
     log_audit,
     log_hitl_action,
     search_patients,
@@ -74,6 +75,7 @@ def metrics_view(metrics: dict) -> dict:
             "calibrated_metrics_valid": t["calibrated_metrics_valid"],
             "baseline_auc": info["candidates"]["logreg"]["test"]["roc_auc"],
             "version": metrics.get("version"), "label": metrics.get("label"),
+            "fairness": info.get("fairness"),
             "feature_importances": [{"feature": f["feature"], "importance": f["mean_abs_shap"]}
                                     for f in info.get("feature_importances", [])],
         }
@@ -403,7 +405,7 @@ async def shap_narrative(request: Request, patient_id: str, prediction_type: str
 
 # ━━━ HITL (FR-3.3.3, FR-3.4.2, FR-3.4.3) ━━━
 class ScheduleActionRequest(BaseModel):
-    action: str
+    action: Literal["approved", "rejected", "modified"]
     reason: str = ""
 
 class FeedbackRequest(BaseModel):
@@ -431,6 +433,16 @@ async def create_recommendation(request: Request, patient_id: str,
         date.today() + timedelta(days=3), date.today() + timedelta(days=14))
     await log_audit(user["username"], user["role"], "create_schedule_rec", patient_id, patient_id=patient_id)
     return result
+
+
+@app.get("/schedule/pending")
+@limiter.limit("30/minute")
+async def pending_recommendations(request: Request,
+    user=Depends(require_role(["admin", "physician", "coordinator"]))):
+    """PC-F5: the approval queue. Everyone with the role can see it; only real accounts can act."""
+    recs = await list_pending_recommendations()
+    await log_audit(user["username"], user["role"], "view_pending_recommendations", "schedule")
+    return {"recommendations": recs, "can_approve": not user["demo"]}
 
 
 @app.post("/schedule/{rec_id}/action")

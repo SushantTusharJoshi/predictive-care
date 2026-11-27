@@ -19,7 +19,7 @@ export default function LoginPage() {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       });
-      doLogin(res.token, res.role, res.name);
+      doLogin(res.token, res.role, res.name, !!res.demo);
       router.push('/dashboard');
     } catch (err: any) {
       setError('Invalid credentials');
@@ -70,7 +70,7 @@ export default function LoginPage() {
                     const res = await api('/auth/login', {
                       method: 'POST', body: JSON.stringify({ username: q.u, password: q.u }),
                     });
-                    doLogin(res.token, res.role, res.name);
+                    doLogin(res.token, res.role, res.name, !!res.demo);
                     router.push('/dashboard');
                   } catch { setError('Failed'); }
                 }}>

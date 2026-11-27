@@ -23,10 +23,13 @@ export function getToken() { return typeof window !== 'undefined' ? localStorage
 export function getRole() { return typeof window !== 'undefined' ? localStorage.getItem('role') || '' : ''; }
 export function getName() { return typeof window !== 'undefined' ? localStorage.getItem('name') || '' : ''; }
 
-export function login(token: string, role: string, name: string) {
+export function getDemo() { return typeof window !== 'undefined' && localStorage.getItem('demo') === 'true'; }
+
+export function login(token: string, role: string, name: string, demo = false) {
   localStorage.setItem('token', token);
   localStorage.setItem('role', role);
   localStorage.setItem('name', name);
+  localStorage.setItem('demo', String(demo));
 }
 
 export function logout() {

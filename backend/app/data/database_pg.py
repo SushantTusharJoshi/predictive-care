@@ -2,6 +2,7 @@
 Fixed: String import order, added pharmacy_refills queries, trust score queries.
 """
 import logging
+import re
 import uuid as uuid_mod
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -125,6 +126,19 @@ SORTABLE_COLUMNS = {"last_name", "first_name", "age", "bmi", "n_sdoh_risks",
 SORT_DIRECTIONS = {"asc", "desc"}
 INSURANCE_TYPES = ("private", "medicare", "medicaid", "uninsured", "employer")
 
+_FULL_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_UUID_PREFIX = re.compile(r"^[0-9a-f-]{4,36}$")
+
+
+def search_mode(q: str) -> str:
+    """PC-F8: 'uuid' for a full patient ID, 'uuid_prefix' for a hex prefix with a digit
+    or dash (so a name like 'Abbe' or 'Dee' is still a name), else 'name'."""
+    if _FULL_UUID.match(q):
+        return "uuid"
+    if _UUID_PREFIX.match(q) and any(c.isdigit() or c == "-" for c in q):
+        return "uuid_prefix"
+    return "name"
+
 async def search_patients(
     q: str = "", archetype: str = "", page: int = 1, page_size: int = 50,
     sort_by: str = "last_name", sort_dir: str = "asc",
@@ -135,7 +149,11 @@ async def search_patients(
 
         if q:
             q_lower = q.lower().strip()
-            if len(q_lower) >= 4 and all(c in "0123456789abcdef-" for c in q_lower):
+            mode = search_mode(q_lower)
+            if mode == "uuid":
+                query = query.where(Patient.patient_id == uuid_mod.UUID(q_lower))
+                count_query = count_query.where(Patient.patient_id == uuid_mod.UUID(q_lower))
+            elif mode == "uuid_prefix":
                 query = query.where(func.cast(Patient.patient_id, SAString).ilike(f"{q_lower}%"))
                 count_query = count_query.where(func.cast(Patient.patient_id, SAString).ilike(f"{q_lower}%"))
             else:
@@ -518,6 +536,24 @@ async def create_scheduling_recommendation(patient_id: str, prediction_type: str
         session.add(rec)
         await session.flush()
         return {"recommendation_id": str(rec.recommendation_id), "status": "pending"}
+
+
+async def list_pending_recommendations(limit: int = 100) -> list[dict]:
+    """PC-F5: the clinician approval queue, newest first."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(SchedulingRecommendation, Patient.first_name, Patient.last_name)
+            .join(Patient, Patient.patient_id == SchedulingRecommendation.patient_id)
+            .where(SchedulingRecommendation.status == "pending")
+            .order_by(desc(SchedulingRecommendation.created_at)).limit(limit))
+        return [
+            {"recommendation_id": str(r.recommendation_id), "patient_id": str(r.patient_id),
+             "patient_name": f"{first} {last}", "prediction_type": r.prediction_type,
+             "predicted_probability": r.predicted_probability, "visit_type": r.recommended_visit_type,
+             "window_start": str(r.recommended_window_start), "window_end": str(r.recommended_window_end),
+             "created_at": str(r.created_at), "status": r.status}
+            for r, first, last in result
+        ]
 
 
 async def action_scheduling_recommendation(rec_id: str, action: str, clinician: str,

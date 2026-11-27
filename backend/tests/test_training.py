@@ -153,3 +153,21 @@ class TestArtifact:
         assert a["er_visit_30d"]["probability"] == b["er_visit_30d"]["probability"]
         assert {"threshold", "flagged", "model_version", "top_features"} <= set(a["er_visit_30d"])
         m.MODELS.clear()
+
+
+class TestFairness:
+    def test_groups_cover_the_test_slice(self, run):
+        metrics, _, _ = run
+        fair = metrics["targets"]["care_need_90d"]["fairness"]
+        assert fair["by"] == "adherence_archetype" and fair["slice"] == "test"
+        assert sum(g["n"] for g in fair["groups"]) == metrics["split"]["test"]["n"]
+        for g in fair["groups"]:
+            assert {"observed_rate", "mean_predicted", "flagged_rate", "recall", "false_positive_rate",
+                    "roc_auc", "enough_data"} <= set(g)
+
+    def test_small_group_is_marked(self):
+        out = tr.fairness_by_group(["a"] * 4 + ["b"] * 40, [1, 0, 0, 0] + [1] * 10 + [0] * 30,
+                                   [0.9, 0.1, 0.2, 0.3] + [0.6] * 40, 0.5)
+        a, b = out["groups"]
+        assert a["enough_data"] is False and b["enough_data"] is True
+        assert b["false_positive_rate"] == 1.0 and b["recall"] == 1.0

@@ -9,7 +9,7 @@ import ast
 from pathlib import Path
 
 MAIN = Path(__file__).resolve().parents[1] / "app" / "main.py"
-PHI_MARKERS = ("/patients", "/search", "/stats", "/predict")
+PHI_MARKERS = ("/patients", "/search", "/stats", "/predict", "/schedule")
 
 
 def _route_path(decorator):

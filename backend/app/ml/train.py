@@ -105,6 +105,7 @@ enc AS (
 SELECT
     p.patient_id::text AS patient_id,
     COALESCE(enc.first_encounter, p.created_at::date) AS patient_time,
+    COALESCE(p.adherence_archetype, 'unknown') AS adherence_archetype,  -- group for the fairness report only
     p.age,
     CASE WHEN p.gender = 'M' THEN 1 ELSE 0 END AS gender_m,
     COALESCE(p.bmi, 25.0) AS bmi,
@@ -187,6 +188,7 @@ def load_memory(n: int = 2000, seed: int = SEED) -> tuple[pd.DataFrame, dict]:
     ins = rng.choice(["medicaid", "medicare", "private", "uninsured"], n, p=[0.21, 0.18, 0.52, 0.09])
     for k in ("medicaid", "medicare", "private", "uninsured"):
         df[f"insurance_{k}"] = (ins == k).astype(int)
+    df["adherence_archetype"] = np.where(adh >= 85, "good", np.where(adh >= 65, "moderate", "poor"))
     df["adherence_trend"] = df["adherence_rate_90d"] - df["adherence_rate_1y_ago"]
     base = (3.0 * (1 - df.adherence_rate_90d / 100) + 0.5 * df.n_diagnoses / 2 + 0.7 * df.smoker
             + 0.4 * df.n_sdoh_risks / 2 + 0.03 * np.maximum(0, df.age - 50) + 0.5 * df.insurance_uninsured)
@@ -291,6 +293,30 @@ def reliability(y, p, bins: int = 10) -> tuple[list[dict], float | None]:
     return rows, round(ece, 4)
 
 
+FAIRNESS_GROUP = "adherence_archetype"
+MIN_GROUP_POSITIVES = 5
+
+
+def fairness_by_group(groups, y, p, threshold) -> dict:
+    """PC-F7: test-slice rates per group at the chosen threshold. Small groups are marked, not hidden."""
+    df = pd.DataFrame({"g": np.asarray(groups), "y": np.asarray(y), "p": np.asarray(p)})
+    df["flag"] = (df.p >= threshold).astype(int)
+    rows = []
+    for g, d in df.groupby("g", sort=True):
+        pos, neg = int(d.y.sum()), int(len(d) - d.y.sum())
+        rows.append({
+            "group": str(g), "n": len(d), "positives": pos,
+            "observed_rate": round(float(d.y.mean()), 4), "mean_predicted": round(float(d.p.mean()), 4),
+            "flagged_rate": round(float(d.flag.mean()), 4),
+            "recall": round(float(d.flag[d.y == 1].mean()), 4) if pos else None,
+            "false_positive_rate": round(float(d.flag[d.y == 0].mean()), 4) if neg else None,
+            "roc_auc": _safe_auc(d.y, d.p, roc_auc_score),
+            "enough_data": pos >= MIN_GROUP_POSITIVES and neg >= MIN_GROUP_POSITIVES,
+        })
+    return {"by": FAIRNESS_GROUP, "slice": "test", "threshold": round(float(threshold), 4),
+            "min_positives_for_rates": MIN_GROUP_POSITIVES, "groups": rows}
+
+
 def _fit_calibrator(method, raw, y):
     if method == "isotonic":
         return IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0).fit(raw, y)
@@ -390,6 +416,8 @@ def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
     if applied and not test_m["calibrated_metrics_valid"]:
         info["calibration"]["note"] = "calibration did not lower test ECE; calibrated metrics are not claimed"
     info["test"] = test_m
+    if FAIRNESS_GROUP in test.columns:
+        info["fairness"] = fairness_by_group(test[FAIRNESS_GROUP], yte, p_te, model.threshold)
 
     shap_abs = np.abs(model.shap_values(Xte)).mean(axis=0) if len(Xte) else np.zeros(len(FEATURE_COLS))
     order = np.argsort(-shap_abs)
