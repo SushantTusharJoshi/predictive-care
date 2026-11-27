@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 from starlette.testclient import TestClient
 
 import app.services.auth as auth
-from app.services.groq_narratives import safe_insurance
+from app.services.narratives import safe_insurance
 from tests.conftest import auth_header
 
 

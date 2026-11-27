@@ -30,3 +30,6 @@ scikit-learn==1.9.1
 xgboost==3.4.1
 lightgbm==4.7.0
 shap==0.54.1
+
+# AWS, imported lazily: only Bedrock narratives, Guardrails and S3 model sync use it
+boto3==1.44.12

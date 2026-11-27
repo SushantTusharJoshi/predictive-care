@@ -1,6 +1,7 @@
 """PredictiveCare API: the single FastAPI entry point (uvicorn app.main:app).
 Includes: patient creation, reminder dispatch, trust scoring, HITL, HIPAA audit.
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -36,7 +37,7 @@ from app.data.database_pg import (
 from app.middleware.hipaa import HipaaAuditMiddleware
 from app.services.auth import authenticate, check_default_credentials, create_token, require_role
 from app.services.create_patient import create_patient
-from app.services.groq_narratives import generate_longitudinal_narrative, generate_shap_narrative
+from app.services.narratives import longitudinal_narrative_result, shap_narrative_result
 from app.services.reminders import (
     check_missed_doses,
     get_patient_reminder_schedule,
@@ -363,9 +364,9 @@ async def longitudinal(request: Request, patient_id: str,
     user=Depends(require_role(["admin", "physician"]))):
     trend_data = await get_longitudinal_analysis(patient_id)
     detail = await get_patient_detail(patient_id)
-    narrative = await generate_longitudinal_narrative(detail, trend_data)
+    result = await asyncio.to_thread(longitudinal_narrative_result, detail, trend_data)
     await log_audit(user["username"], user["role"], "view_longitudinal", patient_id, patient_id=patient_id)
-    return {"trend_data": trend_data, "narrative": narrative}
+    return {"trend_data": trend_data, "narrative": result["narrative"], "narrative_source": result["source"]}
 
 
 @app.get("/patients/{patient_id}/adherence-trend")
@@ -393,9 +394,11 @@ async def shap_narrative(request: Request, patient_id: str, prediction_type: str
     pred_info = detail.get("predictions", {}).get(prediction_type)
     if not pred_info or isinstance(pred_info, str) or "error" in pred_info:
         raise HTTPException(404, "No prediction for this type")
-    narrative = await generate_shap_narrative(detail, pred_info, prediction_type)
+    result = await asyncio.to_thread(shap_narrative_result, detail, pred_info, prediction_type,
+                                     MODEL_INFO["version"])
     await log_audit(user["username"], user["role"], "view_shap_narrative", patient_id, patient_id=patient_id)
-    return {"narrative": narrative, "prediction_type": prediction_type}
+    return {"narrative": result["narrative"], "prediction_type": prediction_type,
+            "narrative_source": result["source"], "cached": result.get("cached", False)}
 
 
 # ━━━ HITL (FR-3.3.3, FR-3.4.2, FR-3.4.3) ━━━
@@ -491,10 +494,11 @@ async def hipaa_data_flow(user=Depends(require_role(["admin"]))):
             {"step": 1, "name": "Authentication", "description": "JWT + RBAC. MFA required in production."},
             {"step": 2, "name": "HIPAA Audit Middleware", "description": "Every PHI access logged with IP, user, timestamp, patient_id."},
             {"step": 3, "name": "Minimum Necessary Access", "description": "RBAC restricts endpoints by role."},
-            {"step": 4, "name": "De-identification for LLM", "description": "18 HIPAA identifiers stripped before Groq calls."},
-            {"step": 5, "name": "Trust Score Gate", "description": "Low-trust self-reports flagged as Unverified (FR-3.2.4)."},
-            {"step": 6, "name": "HITL Gate", "description": "No autonomous scheduling. Clinician approval required."},
-            {"step": 7, "name": "Audit Trail", "description": "All actions persisted to audit_log with patient_id_accessed."},
+            {"step": 4, "name": "De-identification for LLM", "description": "Names, dates of birth, address, ZIP and identifiers stripped before any LLM call (Groq or Bedrock)."},
+            {"step": 5, "name": "Narrative checks", "description": "Every LLM narrative must match the patient's SHAP output and pass local rules (no dosing, diagnosis or causal wording); Bedrock Guardrails when configured. Otherwise the template is shown."},
+            {"step": 6, "name": "Trust Score Gate", "description": "Low-trust self-reports flagged as Unverified (FR-3.2.4)."},
+            {"step": 7, "name": "HITL Gate", "description": "No autonomous scheduling. Clinician approval required."},
+            {"step": 8, "name": "Audit Trail", "description": "All actions persisted to audit_log with patient_id_accessed."},
         ],
     }
 
