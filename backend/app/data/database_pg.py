@@ -119,6 +119,12 @@ async def close_db():
 
 # --- Query functions ---
 
+# PC-N4: only these columns can be sorted on; anything else is rejected before SQL.
+SORTABLE_COLUMNS = {"last_name", "first_name", "age", "bmi", "n_sdoh_risks",
+                    "insurance_type", "adherence_archetype", "gender"}
+SORT_DIRECTIONS = {"asc", "desc"}
+INSURANCE_TYPES = ("private", "medicare", "medicaid", "uninsured", "employer")
+
 async def search_patients(
     q: str = "", archetype: str = "", page: int = 1, page_size: int = 50,
     sort_by: str = "last_name", sort_dir: str = "asc",
@@ -148,8 +154,10 @@ async def search_patients(
         total_result = await session.execute(count_query)
         total = total_result.scalar() or 0
 
-        sort_col = getattr(Patient, sort_by, Patient.last_name)
-        order = asc(sort_col) if sort_dir == "asc" else desc(sort_col)
+        if sort_by not in SORTABLE_COLUMNS:
+            sort_by = "last_name"
+        sort_col = getattr(Patient, sort_by)
+        order = desc(sort_col) if sort_dir == "desc" else asc(sort_col)
         query = query.order_by(order)
 
         offset = (page - 1) * page_size
