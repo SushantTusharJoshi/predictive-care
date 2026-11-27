@@ -1,6 +1,7 @@
 """Trust Score computation engine (FR-3.2.3).
 Computes a 0.0–1.0 score per patient-medication pair from:
   - Historical adherence rate (30/60/90-day rolling)
+  - Current run of consecutive YES reports (a long unbroken run lowers trust)
   - Response latency pattern (sub-3s = auto-tapping flag)
   - Pharmacy refill alignment
   - Clinical outcome correlation
@@ -17,6 +18,27 @@ logger = logging.getLogger(__name__)
 # Thresholds from FR-3.2.5
 THRESHOLD_HIGH = 0.85   # Accept self-report at face value
 THRESHOLD_LOW = 0.60    # Flag as Unverified, alert care team
+
+# PC-F15: a run of this many consecutive YES reports with no miss is suspicious
+STREAK_SUSPICIOUS = 30
+STREAK_PENALTY = 0.15
+STREAK_LOOKBACK = 60    # most recent events read for the streak
+
+
+def consecutive_yes_streak(taken_in_order) -> int:
+    """Current run of consecutive YES reports, oldest event first.
+
+    One pass: each YES extends the run, any miss resets it to zero. So
+    29 yes, 1 no, 1 yes ends with a streak of 1, not 30.
+    """
+    streak = 0
+    for taken in taken_in_order:
+        streak = streak + 1 if taken else 0
+    return streak
+
+
+def streak_penalty(streak: int) -> float:
+    return STREAK_PENALTY if streak >= STREAK_SUSPICIOUS else 0.0
 
 
 def classify(score: float, latency_variance: float = 0) -> str:
@@ -52,18 +74,16 @@ async def compute_trust_score(patient_id: str, medication_name: str) -> dict:
                             THEN response_latency_min END), 15) as avg_latency,
                         COALESCE(STDDEV(CASE WHEN taken AND response_latency_min IS NOT NULL
                             THEN response_latency_min END), 5) as latency_stddev,
-                        -- Streak of consecutive YES (long streaks lower trust)
-                        COUNT(*) FILTER (WHERE taken AND event_date >= CURRENT_DATE - 30) as yes_streak_30d,
-                        COUNT(*) FILTER (WHERE event_date >= CURRENT_DATE - 30) as total_30d
+                        COUNT(*) as total_events
                     FROM adherence_events
-                    WHERE patient_id = :pid::uuid AND medication_name = :med
+                    WHERE patient_id = CAST(:pid AS uuid) AND medication_name = :med
                 ),
                 refills AS (
                     SELECT
                         COALESCE(AVG(actual_gap_days::float / NULLIF(expected_gap_days, 0)), 1.0) as refill_ratio,
                         COUNT(*) as refill_count
                     FROM pharmacy_refills
-                    WHERE patient_id = :pid::uuid AND medication_name = :med
+                    WHERE patient_id = CAST(:pid AS uuid) AND medication_name = :med
                     AND refill_date >= CURRENT_DATE - 180
                 )
                 SELECT a.*, r.refill_ratio, r.refill_count
@@ -74,6 +94,18 @@ async def compute_trust_score(patient_id: str, medication_name: str) -> dict:
         r = row.first()
         if not r:
             return {"score": 0.5, "classification": "occasional_skipper"}
+
+        recent = await session.execute(
+            text("""
+                SELECT taken FROM adherence_events
+                WHERE patient_id = CAST(:pid AS uuid) AND medication_name = :med
+                ORDER BY event_date DESC, event_id DESC
+                LIMIT :n
+            """),
+            {"pid": patient_id, "med": medication_name, "n": STREAK_LOOKBACK},
+        )
+        # newest first from SQL; the streak walks oldest first
+        streak = consecutive_yes_streak(reversed([bool(t) for (t,) in recent]))
 
         # Component scores (each 0.0 – 1.0)
         historical_rate = float(r.rate_90d)
@@ -86,12 +118,8 @@ async def compute_trust_score(patient_id: str, medication_name: str) -> dict:
         refill_ratio = float(r.refill_ratio or 1.0)
         refill_alignment = max(0, 1.0 - abs(refill_ratio - 1.0) * 2)
 
-        # Yes-streak penalty: if every single day is YES for 30 days, suspicious
-        total_30d = int(r.total_30d or 1)
-        yes_30d = int(r.yes_streak_30d or 0)
-        streak_penalty = 0
-        if total_30d > 20 and yes_30d == total_30d:
-            streak_penalty = 0.15  # perfect streak is suspicious
+        # Yes-streak penalty: a long unbroken run of YES is suspicious (auto-tapping)
+        penalty = streak_penalty(streak)
 
         # Weighted composite
         score = (
@@ -99,7 +127,7 @@ async def compute_trust_score(patient_id: str, medication_name: str) -> dict:
             0.20 * response_pattern +
             0.25 * refill_alignment +
             0.15 * float(r.rate_30d)
-        ) - streak_penalty
+        ) - penalty
 
         score = max(0.0, min(1.0, score))
         classification = classify(score, latency_var)
@@ -109,7 +137,8 @@ async def compute_trust_score(patient_id: str, medication_name: str) -> dict:
             "response_pattern": round(response_pattern, 3),
             "refill_alignment": round(refill_alignment, 3),
             "rate_30d": round(float(r.rate_30d), 3),
-            "streak_penalty": round(streak_penalty, 3),
+            "yes_streak": streak,
+            "streak_penalty": round(penalty, 3),
             "refill_ratio": round(refill_ratio, 3),
         }
 
@@ -149,7 +178,7 @@ async def compute_all_trust_scores(patient_id: str) -> list[dict]:
             text("""
                 SELECT DISTINCT medication_name
                 FROM adherence_events
-                WHERE patient_id = :pid::uuid
+                WHERE patient_id = CAST(:pid AS uuid)
                 AND event_date >= CURRENT_DATE - 90
             """),
             {"pid": patient_id}
