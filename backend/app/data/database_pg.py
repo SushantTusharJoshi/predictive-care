@@ -58,12 +58,25 @@ def get_async_session_factory():
     return _async_session_factory
 
 
+def sync_url(url: str) -> str:
+    """Pin the sync driver to psycopg (v3), whatever scheme the host gives us.
+
+    Railway and Heroku hand out postgres:// URLs, and SQLAlchemy's default driver for a
+    bare postgresql:// changed between 2.0 (psycopg2) and 2.1 (psycopg). Naming the
+    driver keeps training and ingest working in the Docker image either way.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 def get_sync_engine():
     global _sync_engine
     if _sync_engine is None:
         settings = get_settings()
         _sync_engine = create_engine(
-            settings.database_url_sync,
+            sync_url(settings.database_url_sync),
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,
