@@ -152,24 +152,27 @@ class TestPipelineRecoversPlantedSignal:
             assert info["test"]["threshold"] == info["threshold"]["value"]
 
 
-# Opt-in: the SQL path on a throwaway Postgres. Never point this at a database you care about: it creates
-# tables and synthetic patients there and refuses to start unless the database has no patients yet.
+# Opt-in: the SQL path on a throwaway Postgres (same variable as the other Postgres tests). Everything runs in
+# a fresh schema that is dropped afterwards, so no existing table in that database is read or changed.
 PG_URL = os.getenv("PC_TEST_DATABASE_URL")
 
 
 @pytest.mark.skipif(not PG_URL, reason="set PC_TEST_DATABASE_URL to a throwaway Postgres to run")
 def test_postgres_in_place_is_idempotent_and_keeps_counts(monkeypatch):
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import create_engine, make_url, text
 
     import app.data.database_pg as db
     from app.config import get_settings
     from app.data import ingest_synthea
 
-    engine = create_engine(db.sync_url(PG_URL))
-    with engine.connect() as conn:
-        has = conn.execute(text("SELECT to_regclass('patients') IS NOT NULL")).scalar()
-        assert not has or conn.execute(text("SELECT COUNT(*) FROM patients")).scalar() == 0, "database not empty"
-    monkeypatch.setenv("DATABASE_URL_SYNC", PG_URL)
+    schema = f"pc_rearrange_test_{uuid.uuid4().hex[:8]}"
+    base = make_url(PG_URL).set(drivername="postgresql+psycopg")
+    scoped = base.update_query_dict({"options": f"-csearch_path={schema}"}).render_as_string(hide_password=False)
+    admin = create_engine(base)
+    with admin.begin() as conn:
+        conn.execute(text(f"CREATE SCHEMA {schema}"))
+    engine = create_engine(scoped)
+    monkeypatch.setenv("DATABASE_URL_SYNC", scoped)
     get_settings.cache_clear()
     monkeypatch.setattr(db, "_sync_engine", None)
     monkeypatch.setattr(db, "_sync_session_factory", None)
@@ -192,9 +195,10 @@ def test_postgres_in_place_is_idempotent_and_keeps_counts(monkeypatch):
         with engine.connect() as conn:
             assert conn.execute(text("SELECT encounter_id, encounter_type FROM encounters ORDER BY 1")).all() == snapshot
     finally:
-        from app.data.models_pg import Base
-        Base.metadata.drop_all(engine)
         engine.dispose()
         if db._sync_engine is not None:
             db._sync_engine.dispose()
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA {schema} CASCADE"))
+        admin.dispose()
         get_settings.cache_clear()
