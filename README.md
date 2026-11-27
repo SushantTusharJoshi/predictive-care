@@ -26,7 +26,7 @@ and training is the single `app.ml.train` script.
 - Versioned model files that the API refuses to load if their sha256 does not match.
 - SHAP explanations for every prediction, and LLM narratives that are shown only if they agree with that SHAP output.
 - A medication trust score and tiered reminders (15 minutes, 5 minutes, due, 10 minutes missed).
-- A clinician gate: the system recommends, a clinician approves; demo accounts cannot approve.
+- A clinician gate: the system recommends, a clinician approves on the Approvals page; demo accounts can only view.
 - An audit-log row for every read of patient data, enforced by a test.
 
 ---
@@ -59,8 +59,8 @@ python -m app.ml.report data/models/metrics.json      # print the tables below
 ### Metrics (demo scale, synthetic)
 
 From [docs/metrics/postgres-demo-600.json](docs/metrics/postgres-demo-600.json): 600 patients seeded with
-`ingest_synthea --fallback --max-patients 600`, trained with `python -m app.ml.train` on 2026-11-27. Test slice:
-120 patients.
+`ingest_synthea --fallback --max-patients 600`, trained with `python -m app.ml.train` on 2026-11-27 (version `20261127T180858Z-2b2ebb2`).
+Test slice: 120 patients.
 
 | Target | Selected | ROC-AUC | PR-AUC | Brier | Threshold | Precision | Recall | F1 | Calibrated |
 |---|---|---|---|---|---|---|---|---|---|
@@ -79,6 +79,9 @@ Sanity check that the pipeline does learn when there is signal, from
 (`python -m app.ml.train --source memory --n 20000`, outcomes drawn from a logistic function of the features):
 test ROC-AUC 0.689 / 0.691 / 0.695 for the three targets, with sigmoid calibration lowering ECE to 0.014 / 0.021 /
 0.017. The logistic baseline wins there by 0.004 to 0.012, as expected for a logistic ground truth.
+
+Fairness: the same run reports error rates per adherence archetype on the test slice (admin page, Bias Audit tab).
+Only care_need_90d has two groups with enough cases (5+ positives and negatives), and their gap is within noise.
 
 Details, limits and the reliability numbers: [model card](docs/model-card.md).
 
@@ -185,10 +188,8 @@ Each function below has a `# What it does` / `# Catch it` / `# Card` header and 
 |---|---|
 | Synthetic data with no feature-outcome link in the fallback generator | Demo metrics are chance-level; nothing here says how the model would do on real patients |
 | Small demo cohort | Calibration is skipped for two of three targets; test metrics have wide error bars |
-| Fairness not measured by group yet | No per-group error rates in the model card |
+| Fairness reported by archetype only, on too few cases | No group comparison can be trusted yet; race and sex not reported |
 | Narrative cache, daily caps and rate limits are in-process | Each worker counts separately; restarts reset them |
 | Live Groq, Bedrock and Guardrails calls unverified | Only stub-tested until a key and Bedrock access exist |
-| Clinician approval queue has no page yet | Approval works through the API only |
-| Search treats any 4+ character hex string as a patient-ID prefix | A name made only of the letters a to f is searched as an ID |
 | JWT in `localStorage`, no MFA or SSO | See [SECURITY.md](SECURITY.md) |
 | Ingest uses ORM inserts | Large cohorts (100K patients) take hours to load |

@@ -1,6 +1,6 @@
 {
-  "version": "20261127T171543Z-db5430d",
-  "created_at": "2026-11-27T17:15:43.405343+00:00",
+  "version": "20261127T180858Z-2b2ebb2",
+  "created_at": "2026-11-27T18:08:58.488863+00:00",
   "label": "demo: 600 synthetic patients (ingest_synthea --fallback)",
   "data": {
     "source": "postgres",
@@ -218,6 +218,74 @@
         ],
         "calibrated_metrics_valid": false
       },
+      "fairness": {
+        "by": "adherence_archetype",
+        "slice": "test",
+        "threshold": 0.5,
+        "min_positives_for_rates": 5,
+        "groups": [
+          {
+            "group": "erratic",
+            "n": 10,
+            "positives": 0,
+            "observed_rate": 0.0,
+            "mean_predicted": 0.44,
+            "flagged_rate": 0.4,
+            "recall": null,
+            "false_positive_rate": 0.4,
+            "roc_auc": null,
+            "enough_data": false
+          },
+          {
+            "group": "excellent",
+            "n": 18,
+            "positives": 0,
+            "observed_rate": 0.0,
+            "mean_predicted": 0.3523,
+            "flagged_rate": 0.1667,
+            "recall": null,
+            "false_positive_rate": 0.1667,
+            "roc_auc": null,
+            "enough_data": false
+          },
+          {
+            "group": "good",
+            "n": 38,
+            "positives": 2,
+            "observed_rate": 0.0526,
+            "mean_predicted": 0.494,
+            "flagged_rate": 0.5,
+            "recall": 0.5,
+            "false_positive_rate": 0.5,
+            "roc_auc": 0.4167,
+            "enough_data": false
+          },
+          {
+            "group": "moderate",
+            "n": 35,
+            "positives": 0,
+            "observed_rate": 0.0,
+            "mean_predicted": 0.3935,
+            "flagged_rate": 0.4,
+            "recall": null,
+            "false_positive_rate": 0.4,
+            "roc_auc": null,
+            "enough_data": false
+          },
+          {
+            "group": "poor",
+            "n": 19,
+            "positives": 0,
+            "observed_rate": 0.0,
+            "mean_predicted": 0.5041,
+            "flagged_rate": 0.4211,
+            "recall": null,
+            "false_positive_rate": 0.4211,
+            "roc_auc": null,
+            "enough_data": false
+          }
+        ]
+      },
       "feature_importances": [
         {
           "feature": "n_active_meds",
@@ -389,6 +457,74 @@
           }
         ],
         "calibrated_metrics_valid": true
+      },
+      "fairness": {
+        "by": "adherence_archetype",
+        "slice": "test",
+        "threshold": 0.1682,
+        "min_positives_for_rates": 5,
+        "groups": [
+          {
+            "group": "erratic",
+            "n": 10,
+            "positives": 0,
+            "observed_rate": 0.0,
+            "mean_predicted": 0.1534,
+            "flagged_rate": 0.5,
+            "recall": null,
+            "false_positive_rate": 0.5,
+            "roc_auc": null,
+            "enough_data": false
+          },
+          {
+            "group": "excellent",
+            "n": 18,
+            "positives": 1,
+            "observed_rate": 0.0556,
+            "mean_predicted": 0.1673,
+            "flagged_rate": 0.4444,
+            "recall": 1.0,
+            "false_positive_rate": 0.4118,
+            "roc_auc": 0.6471,
+            "enough_data": false
+          },
+          {
+            "group": "good",
+            "n": 38,
+            "positives": 7,
+            "observed_rate": 0.1842,
+            "mean_predicted": 0.1745,
+            "flagged_rate": 0.5526,
+            "recall": 0.4286,
+            "false_positive_rate": 0.5806,
+            "roc_auc": 0.4562,
+            "enough_data": true
+          },
+          {
+            "group": "moderate",
+            "n": 35,
+            "positives": 5,
+            "observed_rate": 0.1429,
+            "mean_predicted": 0.1543,
+            "flagged_rate": 0.3143,
+            "recall": 0.6,
+            "false_positive_rate": 0.2667,
+            "roc_auc": 0.5867,
+            "enough_data": true
+          },
+          {
+            "group": "poor",
+            "n": 19,
+            "positives": 4,
+            "observed_rate": 0.2105,
+            "mean_predicted": 0.1531,
+            "flagged_rate": 0.3158,
+            "recall": 0.25,
+            "false_positive_rate": 0.3333,
+            "roc_auc": 0.4833,
+            "enough_data": false
+          }
+        ]
       },
       "feature_importances": [
         {
@@ -575,6 +711,74 @@
         ],
         "calibrated_metrics_valid": false
       },
+      "fairness": {
+        "by": "adherence_archetype",
+        "slice": "test",
+        "threshold": 0.4463,
+        "min_positives_for_rates": 5,
+        "groups": [
+          {
+            "group": "erratic",
+            "n": 10,
+            "positives": 0,
+            "observed_rate": 0.0,
+            "mean_predicted": 0.5059,
+            "flagged_rate": 0.6,
+            "recall": null,
+            "false_positive_rate": 0.6,
+            "roc_auc": null,
+            "enough_data": false
+          },
+          {
+            "group": "excellent",
+            "n": 18,
+            "positives": 0,
+            "observed_rate": 0.0,
+            "mean_predicted": 0.5027,
+            "flagged_rate": 0.7778,
+            "recall": null,
+            "false_positive_rate": 0.7778,
+            "roc_auc": null,
+            "enough_data": false
+          },
+          {
+            "group": "good",
+            "n": 38,
+            "positives": 3,
+            "observed_rate": 0.0789,
+            "mean_predicted": 0.4986,
+            "flagged_rate": 0.7368,
+            "recall": 0.6667,
+            "false_positive_rate": 0.7429,
+            "roc_auc": 0.4762,
+            "enough_data": false
+          },
+          {
+            "group": "moderate",
+            "n": 35,
+            "positives": 1,
+            "observed_rate": 0.0286,
+            "mean_predicted": 0.433,
+            "flagged_rate": 0.4,
+            "recall": 0.0,
+            "false_positive_rate": 0.4118,
+            "roc_auc": 0.5,
+            "enough_data": false
+          },
+          {
+            "group": "poor",
+            "n": 19,
+            "positives": 1,
+            "observed_rate": 0.0526,
+            "mean_predicted": 0.441,
+            "flagged_rate": 0.5263,
+            "recall": 0.0,
+            "false_positive_rate": 0.5556,
+            "roc_auc": 0.0556,
+            "enough_data": false
+          }
+        ]
+      },
       "feature_importances": [
         {
           "feature": "avg_hr",
@@ -620,8 +824,8 @@
     }
   },
   "artifact": {
-    "file": "models-20261127T171543Z-db5430d.pkl",
-    "sha256": "0e92b7da1a314513c190abdc1118676eb793330b73f15ce046cb51f30094ea07",
-    "version": "20261127T171543Z-db5430d"
+    "file": "models-20261127T180858Z-2b2ebb2.pkl",
+    "sha256": "19bb9c159b4c706466be9f04a67933909c1167051a2634824cf33b4a83128259",
+    "version": "20261127T180858Z-2b2ebb2"
   }
 }

@@ -568,7 +568,8 @@ async def action_scheduling_recommendation(rec_id: str, action: str, clinician: 
             return {"error": "Recommendation not found"}
         rec.status = action
         rec.actioned_by = clinician
-        rec.actioned_at = datetime.now(UTC)
+        # the column is timezone-naive; asyncpg rejects an aware datetime, so store naive UTC
+        rec.actioned_at = datetime.now(UTC).replace(tzinfo=None)
         rec.modification_reason = reason
         return {"recommendation_id": str(rec.recommendation_id), "status": action}
 
