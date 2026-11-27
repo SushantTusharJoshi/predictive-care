@@ -247,20 +247,70 @@ async def list_patients(
     if sort_by not in SORTABLE_COLUMNS or sort_dir not in SORT_DIRECTIONS:
         raise HTTPException(400, "Unsupported sort_by or sort_dir")
     result = await search_patients(q, archetype, page, page_size, sort_by, sort_dir)
-    archetype_risk = {
-        "excellent": {"er_visit_30d": 0.05, "care_need_90d": 0.08},
-        "good": {"er_visit_30d": 0.12, "care_need_90d": 0.18},
-        "moderate": {"er_visit_30d": 0.28, "care_need_90d": 0.35},
-        "poor": {"er_visit_30d": 0.55, "care_need_90d": 0.62},
-        "erratic": {"er_visit_30d": 0.42, "care_need_90d": 0.48},
-    }
-    for p in result["patients"]:
-        arch = p.get("adherence_archetype", "moderate")
-        base = archetype_risk.get(arch, archetype_risk["moderate"])
-        bump = (p.get("n_sdoh_risks", 0) or 0) * 0.03 + max(0, ((p.get("age", 50) or 50) - 50) * 0.003)
-        p["risk_scores"] = {k: round(min(v + bump, 0.99), 3) for k, v in base.items()}
+    if user["role"] in ("admin", "physician"):
+        await _attach_list_risk(result["patients"])
+    else:
+        for p in result["patients"]:
+            p["risk_scores"], p["risk_calibrated"] = None, None
     await log_audit(user["username"], user["role"], "list_patients", f"page={page}")
     return result
+
+
+LIST_FEATURE_CONCURRENCY = 5  # feature queries in flight per list request
+
+
+def _is_calibrated(data: dict) -> bool | None:
+    """True/False when the bundle says whether this target's scores are calibrated, else None."""
+    if "calibrated" in data:
+        return bool(data["calibrated"])
+    model = data.get("model")
+    if model is not None and hasattr(model, "calibrator"):
+        return bool(model.calibrator)
+    return None
+
+
+async def _attach_list_risk(patients: list[dict]) -> None:
+    """Model risk for the patients on this page only, one batched predict per target.
+
+    Same feature path as the prediction endpoint (get_patient_features, then _feature_row).
+    With no models loaded, or no features for a patient, risk_scores is None.
+    """
+    if not patients:
+        return
+    if not (MODELS and FEATURE_COLS):
+        for p in patients:
+            p["risk_scores"], p["risk_calibrated"] = None, None
+        return
+    sem = asyncio.Semaphore(LIST_FEATURE_CONCURRENCY)
+
+    async def features_for(pid) -> dict | None:
+        async with sem:
+            try:
+                return await get_patient_features(str(pid))
+            except Exception:
+                logger.exception("Feature lookup failed for a patient list row")
+                return None
+
+    feats = await asyncio.gather(*(features_for(p.get("patient_id")) for p in patients))
+    have = [i for i, f in enumerate(feats) if f]
+    scores: list[dict] = [{} for _ in patients]
+    if have:
+        rows = pd.concat([_feature_row(feats[i]) for i in have], ignore_index=True)
+        for name, data in MODELS.items():
+            model = data.get("model")
+            if not model:
+                continue
+            try:
+                probs = model.predict_proba(rows)[:, 1]
+            except Exception:
+                logger.exception("Batch prediction failed for %s", name)
+                continue
+            for j, i in enumerate(have):
+                scores[i][name] = round(float(probs[j]), 4)
+    calibrated = {name: _is_calibrated(data) for name, data in MODELS.items()}
+    for p, s in zip(patients, scores, strict=True):
+        p["risk_scores"] = s or None
+        p["risk_calibrated"] = {k: calibrated.get(k) for k in s} if s else None
 
 
 @app.get("/search")
