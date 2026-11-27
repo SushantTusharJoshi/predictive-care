@@ -1,4 +1,5 @@
 """Authentication, RBAC, and JWT token management for PredictiveCare v3.1."""
+import hmac
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -188,3 +189,21 @@ def require_role(allowed_roles: list[str], permission: str | None = None):
         # RETURN: the user, for audit logging in the route
         return user
     return _dependency
+
+
+OPS_USER = {"username": "ops-token", "role": "machine", "name": "Ops automation", "demo": False}
+
+
+def require_ops_token(authorization: str = Header(None)) -> dict:
+    """FastAPI dependency for /ops: a machine token from OPS_TOKEN, never a user JWT.
+
+    503 when OPS_TOKEN is unset (the routes are off), 401 for a missing or wrong token.
+    The comparison is constant time, so response timing does not leak the token.
+    """
+    expected = settings.ops_token
+    if not expected:
+        raise HTTPException(503, "Ops endpoints are disabled: OPS_TOKEN is not set")
+    scheme, _, given = (authorization or "").partition(" ")
+    if scheme != "Bearer" or not hmac.compare_digest(given.encode(), expected.encode()):
+        raise HTTPException(401, "Invalid ops token")
+    return dict(OPS_USER)

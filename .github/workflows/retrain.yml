@@ -1,0 +1,79 @@
+# Weekly retrain on the live API: POST /ops/retrain, then poll GET /ops/retrain until the run ends.
+# Fails the job when the run failed or the new model did not pass the hash check (it was not swapped in).
+# A 409 means a run is already going; the job follows that run instead.
+#
+#   needs: secrets.OPS_TOKEN, vars.API_BASE. Skips with a notice when either is missing.
+#   also called by monitor.yml on drift (trigger=drift).
+name: Retrain
+
+on:
+  schedule:
+    - cron: "41 7 * * 1"   # Mondays 07:41 UTC
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+        default: drift
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      OPS_TOKEN: ${{ secrets.OPS_TOKEN }}
+      API_BASE: ${{ vars.API_BASE }}
+      TRIGGER: ${{ inputs.trigger || (github.event_name == 'schedule' && 'schedule') || 'manual' }}
+    steps:
+      - name: Skip without the token or the API address
+        if: env.OPS_TOKEN == '' || env.API_BASE == ''
+        run: echo "::notice::OPS_TOKEN secret or API_BASE variable is not set; skipping the retrain."
+
+      - name: Start the retrain
+        if: env.OPS_TOKEN != '' && env.API_BASE != ''
+        run: |
+          code=$(curl -sS --retry 3 --retry-all-errors --max-time 60 -o start.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $OPS_TOKEN" "${API_BASE%/}/ops/retrain?trigger=$TRIGGER")
+          cat start.json; echo
+          case "$code" in
+            202) echo "Started." ;;
+            409) echo "::notice::A retrain is already running; following it." ;;
+            *) echo "::error::POST /ops/retrain returned $code"; exit 1 ;;
+          esac
+
+      - name: Wait for the result
+        if: env.OPS_TOKEN != '' && env.API_BASE != ''
+        run: |
+          deadline=$(( $(date +%s) + 90 * 60 ))
+          while :; do
+            if curl -sS --fail-with-body --max-time 60 -H "Authorization: Bearer $OPS_TOKEN" \
+                 "${API_BASE%/}/ops/retrain" -o status.json; then
+              state=$(python3 -c 'import json; print(json.load(open("status.json"))["state"])')
+              echo "state: $state"
+              [ "$state" != "running" ] && break
+            else
+              echo "status request failed; retrying"
+            fi
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "::error::retrain still running after 90 minutes"; exit 1; }
+            sleep 30
+          done
+          python3 - <<'PY'
+          import json, os
+          s = json.load(open("status.json"))
+          lines = [f"## Retrain: `{s['state']}`", "", "| Field | Value |", "|---|---|"]
+          for k in ("run_id", "trigger", "started_at", "finished_at", "previous_version", "new_version",
+                    "verified", "swapped", "note", "error"):
+              lines.append(f"| {k} | {s.get(k)} |")
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write("\n".join(lines) + "\n")
+          if s["state"] != "succeeded" or s.get("verified") is not True:
+              print(f"::error::retrain {s['state']}, verified={s.get('verified')}: {s.get('error')}")
+              raise SystemExit(1)
+          print(f"new model {s.get('new_version')} verified; swapped={s.get('swapped')}")
+          PY

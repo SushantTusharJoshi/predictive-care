@@ -1,0 +1,114 @@
+# Deploy the backend to Railway after CI passes on main (or by hand).
+#
+#   needs: secrets.RAILWAY_TOKEN (a Railway project token for the production environment),
+#          vars.API_BASE (the public API address, for the /health check)
+#   The Railway service predictive-care-api has its root directory set to backend, so the
+#   upload runs from the repo root. Skips with a notice when RAILWAY_TOKEN is missing.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # only a CI run for a push to main in this repo that ended in success
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash   # -eo pipefail, so a failed `railway up` is not hidden by tee
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      API_BASE: ${{ vars.API_BASE }}
+      SERVICE: predictive-care-api
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Skip without the Railway token
+        if: env.RAILWAY_TOKEN == ''
+        run: echo "::notice::RAILWAY_TOKEN secret is not set; skipping the deploy."
+
+      - uses: actions/checkout@v4
+        if: env.RAILWAY_TOKEN != ''
+        with:
+          # the exact commit CI passed, not whatever main is now
+          ref: ${{ env.DEPLOY_SHA }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: env.RAILWAY_TOKEN != ''
+        with:
+          node-version: "20"
+
+      - name: Install the Railway CLI
+        if: env.RAILWAY_TOKEN != ''
+        run: npm install -g @railway/cli@5.71.0 && railway --version
+
+      - name: Upload and deploy
+        id: up
+        if: env.RAILWAY_TOKEN != ''
+        run: |
+          railway up --service "$SERVICE" --detach --json | tee up.json
+          id=$(python3 -c 'import json,sys; print(json.loads(open("up.json").read().strip().splitlines()[-1]).get("deploymentId",""))' || true)
+          [ -n "$id" ] || echo "::warning::no deployment id in the CLI output; only /health will be checked"
+          echo "deployment_id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the Railway deployment
+        if: env.RAILWAY_TOKEN != '' && steps.up.outputs.deployment_id != ''
+        env:
+          DEPLOYMENT_ID: ${{ steps.up.outputs.deployment_id }}
+        run: |
+          # --detach returns once the upload is in, and the old deployment keeps answering /health
+          # until the new one is live, so wait for this deployment's own status first.
+          deadline=$(( $(date +%s) + 20 * 60 ))
+          while :; do
+            status=$(railway deployment list --service "$SERVICE" --json --limit 20 2>/dev/null | python3 -c '
+          import json, os, sys
+          try:
+              rows = json.load(sys.stdin)
+          except ValueError:
+              rows = []
+          print(next((r["status"] for r in rows if r.get("id") == os.environ["DEPLOYMENT_ID"]), "UNKNOWN"))') || status=UNKNOWN
+            echo "deployment $DEPLOYMENT_ID: $status"
+            case "$status" in
+              SUCCESS) break ;;
+              FAILED|CRASHED|REMOVED) echo "::error::Railway deployment $status"; exit 1 ;;
+            esac
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "::error::deployment not live after 20 minutes"; exit 1; }
+            sleep 15
+          done
+
+      - name: Wait for /health
+        if: env.RAILWAY_TOKEN != ''
+        run: |
+          if [ -z "$API_BASE" ]; then
+            echo "::warning::API_BASE variable is not set; skipping the health check."; exit 0
+          fi
+          for i in $(seq 1 40); do
+            code=$(curl -s -o health.json -w '%{http_code}' --max-time 10 "${API_BASE%/}/health" || true)
+            if [ "$code" = "200" ]; then
+              cat health.json; echo
+              echo "## Deployed \`${DEPLOY_SHA::7}\`" >> "$GITHUB_STEP_SUMMARY"
+              echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat health.json >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $i: /health returned $code"
+            sleep 15
+          done
+          echo "::error::/health did not return 200 within 10 minutes"; exit 1

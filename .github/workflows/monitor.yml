@@ -1,0 +1,94 @@
+# Nightly drift check against the live API (GET /ops/drift with the machine token).
+#
+#   needs: secrets.OPS_TOKEN (same value as the API's OPS_TOKEN), vars.API_BASE (https://... no trailing path)
+#   on drift: opens or updates the one open issue labelled `drift`, then runs retrain.yml,
+#             which starts POST /ops/retrain and waits for the verified result.
+# Skips with a notice when the secret or the variable is missing.
+name: Monitor
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # 06:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      status: ${{ steps.report.outputs.status }}
+    env:
+      OPS_TOKEN: ${{ secrets.OPS_TOKEN }}
+      API_BASE: ${{ vars.API_BASE }}
+    steps:
+      - name: Skip without the token or the API address
+        if: env.OPS_TOKEN == '' || env.API_BASE == ''
+        run: echo "::notice::OPS_TOKEN secret or API_BASE variable is not set; skipping the drift check."
+
+      - name: Fetch the drift report
+        if: env.OPS_TOKEN != '' && env.API_BASE != ''
+        run: |
+          curl -sS --fail-with-body --retry 3 --retry-all-errors --max-time 300 \
+            -H "Authorization: Bearer $OPS_TOKEN" "${API_BASE%/}/ops/drift" -o drift.json
+
+      - name: Job summary
+        id: report
+        if: env.OPS_TOKEN != '' && env.API_BASE != ''
+        run: |
+          python3 - <<'PY'
+          import json, os
+          r = json.load(open("drift.json"))
+          status = r.get("status", "unknown")
+          rows = [(f, v) for f, v in r.get("features", {}).items()]
+          rows += [(f"score: {t}", v) for t, v in r.get("scores", {}).items()]
+          rows.sort(key=lambda x: -x[1]["psi"])
+          lines = [f"## Drift: `{status}`", "",
+                   f"Model `{r.get('model_version')}`, {r.get('n_live', 0)} live patients, "
+                   f"generated {r.get('generated_at')}. Bands: ok < 0.1, watch 0.1 to 0.25, drift > 0.25.", ""]
+          if r.get("reason"):
+              lines += [f"Reason: {r['reason']}", ""]
+          if rows:
+              lines += ["| Item | PSI | Status |", "|---|---|---|"]
+              lines += [f"| {name} | {v['psi']:.4f} | {v['status']} |" for name, v in rows]
+          o = r.get("overrides", {})
+          lines += ["", f"Clinician overrides: {o.get('n', 0)} total, {o.get('n_last_30d', 0)} in the last 30 days, "
+                    f"agreement with the model {o.get('agreement')}."]
+          body = "\n".join(lines)
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(body + "\n")
+          open("issue.md", "w").write(body + f"\n\nRun: {os.environ['GITHUB_SERVER_URL']}/"
+                                      f"{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}\n")
+          open(os.environ["GITHUB_OUTPUT"], "a").write(f"status={status}\n")
+          PY
+
+      - name: Open or update the drift issue
+        if: steps.report.outputs.status == 'drift'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create drift --color B60205 --description "Production drift from the monitor workflow" --force
+          number=$(gh issue list --label drift --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file issue.md
+            gh issue comment "$number" --body "Still drifting on $(date -u +%F). Report updated above."
+          else
+            gh issue create --title "Production drift detected" --label drift --body-file issue.md
+          fi
+
+  retrain:
+    needs: drift
+    if: needs.drift.outputs.status == 'drift'
+    uses: ./.github/workflows/retrain.yml
+    with:
+      trigger: drift
+    secrets: inherit

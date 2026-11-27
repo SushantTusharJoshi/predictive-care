@@ -39,7 +39,7 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from app.ml import artifacts
+from app.ml import artifacts, drift, feedback
 from app.ml.risk_model import RiskModel
 
 logger = logging.getLogger(__name__)
@@ -436,8 +436,13 @@ def _git_sha() -> str:
 
 
 def run(df: pd.DataFrame, data_info: dict, model_dir: Path | None = None, version: str | None = None,
-        label: str = "demo", knn: dict | None = None) -> dict:
-    """Train every target, and (when model_dir is given) write the versioned artifact."""
+        label: str = "demo", knn: dict | None = None, overrides: pd.DataFrame | None = None,
+        override_features: pd.DataFrame | None = None) -> dict:
+    """Train every target, and (when model_dir is given) write the versioned artifact.
+
+    metrics.json also gets the drift baseline (decile histograms for /ops/drift) and the
+    new model's agreement with clinician overrides (PC-F6: feedback, never labels).
+    """
     df = df.copy()
     df[FEATURE_COLS] = df[FEATURE_COLS].astype(float).fillna(0)
     train, cal, test = time_split(df)
@@ -459,6 +464,12 @@ def run(df: pd.DataFrame, data_info: dict, model_dir: Path | None = None, versio
             logger.info("%s: %s roc_auc=%s pr_auc=%s brier=%s f1=%s@%s calibration=%s", target, info["selected"],
                         t["roc_auc"], t["pr_auc"], t["brier"], t["f1"], t["threshold"],
                         info["calibration"].get("method") or info["calibration"]["status"])
+    test_scores = {t: e["model"].predict_proba(test[FEATURE_COLS])[:, 1] for t, e in models.items()} if len(test) else {}
+    metrics["drift_baseline"] = drift.build_baseline(train[FEATURE_COLS], test_scores)
+    if overrides is None:
+        overrides = pd.DataFrame(columns=feedback.COLUMNS)
+    features = df if override_features is None else override_features
+    metrics["override_feedback"] = feedback.model_agreement(models, overrides, features, FEATURE_COLS)
     if model_dir is not None:
         bundle = {"version": version, "models": models, "feature_cols": FEATURE_COLS, "knn": knn}
         manifest = artifacts.save_bundle(Path(model_dir), version, bundle, metrics)
@@ -483,6 +494,7 @@ def main(argv=None):
         from app.config import get_settings
         args.model_dir = get_settings().model_dir
 
+    overrides = override_features = None
     if args.source == "memory":
         df, info = load_memory(args.n)
         knn = None
@@ -492,8 +504,15 @@ def main(argv=None):
         if not args.no_knn:
             from app.ml.similar_patients import build_knn_payload_from_pg
             knn = build_knn_payload_from_pg()
+        try:  # PC-F6: overrides are scored against the new model, never added to the labels
+            overrides = feedback.load_overrides()
+            override_features = drift.load_live() if len(overrides) else None
+        except Exception as e:
+            logger.warning("Override feedback skipped (%s)", type(e).__name__)
+            overrides = None
     logger.info("Loaded %d patients from %s", len(df), info["source"])
-    metrics = run(df, info, Path(args.model_dir), label=args.label, knn=knn)
+    metrics = run(df, info, Path(args.model_dir), label=args.label, knn=knn, overrides=overrides,
+                  override_features=override_features)
     logger.info("Saved %s (sha256 %s)", metrics["artifact"]["file"], metrics["artifact"]["sha256"][:12])
     if args.upload:
         artifacts.upload(Path(args.model_dir), artifacts.read_manifest(Path(args.model_dir)))
