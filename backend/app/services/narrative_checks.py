@@ -109,6 +109,29 @@ def _mentions(clause: str) -> list[tuple[int, set[str], str]]:
     return sorted(found, key=lambda x: x[0])
 
 
+CONJUNCTION_ONLY = re.compile(r"^[\W_]*(?:and|or|as well as)?[\W_]*$")
+
+
+def _segment_claims(clause: str, found) -> list[str | None]:
+    """Direction for each mention: the cue words between it and the next mention.
+
+    "X lowers the score, Y raises it" gives down, up. A mention followed only by
+    "and" shares the next one's verb ("BMI and age raise risk"). Both cues in one
+    segment gives "both", which fails.
+    """
+    starts = [pos for pos, _, _ in found] + [len(clause)]
+    claims: list[str | None] = []
+    for i, (pos, _, word) in enumerate(found):
+        seg = clause[pos + len(word):starts[i + 1]]
+        ups, downs = bool(UP.search(seg)), bool(DOWN.search(seg))
+        claims.append("both" if ups and downs else "up" if ups else "down" if downs else
+                      ("share" if CONJUNCTION_ONLY.match(seg) and i + 1 < len(found) else None))
+    for i in range(len(claims) - 1, -1, -1):
+        if claims[i] == "share":
+            claims[i] = claims[i + 1] if claims[i + 1] in ("up", "down") else None
+    return claims
+
+
 def check_shap(text: str, top_features: list[dict], k: int = 5) -> CheckResult:
     """PC-F3: is every feature the narrative names faithful to this patient's SHAP output?"""
     top = [f for f in top_features[:k] if f.get("shap_value")]
@@ -128,21 +151,21 @@ def check_shap(text: str, top_features: list[dict], k: int = 5) -> CheckResult:
         found = _mentions(clause)
         if not found:
             continue
-        ups, downs = bool(UP.search(clause)), bool(DOWN.search(clause))
-        if ups and downs:
-            reasons.append(f"one clause says both raises and lowers: '{clause.strip()[:80]}'")
-            continue
-        claim = "up" if ups else "down" if downs else None
-        first = None
-        for _, cands, word in found:
+        claims = _segment_claims(clause, found)
+        first_feat, first_claim = None, None
+        for (_, cands, word), claim in zip(found, claims, strict=True):
             hits = [c for c in cands if c in shap]
             if not hits:
                 reasons.append(f"names '{word}', which is not in the top {k} SHAP features")
                 continue
             feat = min(hits, key=lambda c: rank[c])
-            first = first or feat
+            if first_feat is None:
+                first_feat, first_claim = feat, claim
             if feat not in mentioned:
                 mentioned.append(feat)
+            if claim == "both":
+                reasons.append(f"says '{word}' both raises and lowers risk")
+                continue
             if not claim:
                 continue  # named without a direction: nothing to contradict
             actual = "up" if shap[feat] > 0 else "down"
@@ -151,11 +174,11 @@ def check_shap(text: str, top_features: list[dict], k: int = 5) -> CheckResult:
                                f"SHAP says it {'raises' if actual == 'up' else 'lowers'} it")
             elif feat not in order[claim]:
                 order[claim].append(feat)
-        if claim and first and SUPERLATIVE.search(clause):
-            same_dir = [n for n in shap if (shap[n] > 0) == (claim == "up")]
+        if first_claim in ("up", "down") and SUPERLATIVE.search(clause):
+            same_dir = [n for n in shap if (shap[n] > 0) == (first_claim == "up")]
             best = min(same_dir, key=lambda n: rank[n]) if same_dir else None
-            if best and first != best:
-                reasons.append(f"calls '{first}' the largest factor; SHAP ranks '{best}' higher")
+            if best and first_feat != best:
+                reasons.append(f"calls '{first_feat}' the largest factor; SHAP ranks '{best}' higher")
 
     for direction, feats in order.items():
         ranks = [rank[f] for f in feats]
