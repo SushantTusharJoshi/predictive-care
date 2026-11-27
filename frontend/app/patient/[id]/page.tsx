@@ -492,7 +492,7 @@ function SimilarTab({ data, router }: { data: any; router: any }) {
                 <td style={{ padding: '8px 12px', textTransform: 'capitalize' }}>{s.adherence_archetype}</td>
                 <td style={{ padding: '8px 12px', fontWeight: 600,
                   color: s.avg_adherence_pct > 80 ? 'var(--green)' : s.avg_adherence_pct > 60 ? 'var(--yellow)' : 'var(--red)' }}>
-                  {s.avg_adherence_pct}%
+                  {s.avg_adherence_pct == null ? '-' : `${s.avg_adherence_pct}%`}
                 </td>
                 <td style={{ padding: '8px 12px' }}>
                   <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{s.similarity_score}%</span>
