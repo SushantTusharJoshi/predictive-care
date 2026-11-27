@@ -247,7 +247,8 @@ async def list_patients(
     if sort_by not in SORTABLE_COLUMNS or sort_dir not in SORT_DIRECTIONS:
         raise HTTPException(400, "Unsupported sort_by or sort_dir")
     result = await search_patients(q, archetype, page, page_size, sort_by, sort_dir)
-    if user["role"] in ("admin", "physician"):
+    # DECISION: model risk on the list is shown to admins only
+    if user["role"] == "admin":
         await _attach_list_risk(result["patients"])
     else:
         for p in result["patients"]:
