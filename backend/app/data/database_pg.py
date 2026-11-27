@@ -273,66 +273,77 @@ async def get_patient_detail(patient_id: str) -> dict | None:
         }
 
 
-async def get_patient_features(patient_id: str) -> dict | None:
+# Serving features (PC-F12 training/serving parity). The model was trained on
+# app.ml.train.POSTGRES_SQL with every feature taken strictly before an index date
+# that is anchored on the data's own latest encounter, not on the wall clock. Serving
+# runs that same SQL, filtered to one patient, so the two cannot drift apart. The
+# serving index date is the day after the latest encounter in the data: what a live
+# system would see at that moment. Anchoring on CURRENT_DATE instead left every
+# "last 90 days" window empty on a database whose events ended months ago.
+_TRAIN_COHORT_FILTER = "WHERE COALESCE(enc.first_encounter, p.created_at::date) < :idx"
+_DATA_AS_OF_SQL = "SELECT MAX(encounter_date) FROM encounters"
+
+
+def serving_features_sql() -> str:
+    """Training's feature SQL for one patient (:pid) at index date :idx, plus the
+    non-model display columns, all anchored on :idx."""
+    from app.ml.train import POSTGRES_SQL
+
+    if _TRAIN_COHORT_FILTER not in POSTGRES_SQL:
+        raise RuntimeError("app.ml.train.POSTGRES_SQL changed; update serving_features_sql to match")
+    one_patient = POSTGRES_SQL.replace(_TRAIN_COHORT_FILTER, "WHERE p.patient_id = CAST(:pid AS uuid)")
+    sql = f"""
+        SELECT f.*,
+               (SELECT COUNT(*) FROM encounters e WHERE e.patient_id = CAST(:pid AS uuid)
+                AND e.encounter_type = 'er'
+                AND e.encounter_date >= :idx - 365 AND e.encounter_date < :idx) AS er_visits_1y,
+               (SELECT COUNT(*) FROM pharmacy_refills r WHERE r.patient_id = CAST(:pid AS uuid)
+                AND r.refill_date >= :idx - 180 AND r.refill_date < :idx) AS refills_6m
+        FROM ({one_patient}) f
+    """
+    return sql.replace(":idx", "CAST(:idx AS date)")
+
+
+def serving_index_date(data_as_of: date | None) -> date:
+    """Day after the data's latest encounter, so events on that day are included
+    (features are strictly before the index date, as in training)."""
+    return (data_as_of or date.today()) + timedelta(days=1)
+
+
+def features_from_row(row: dict) -> dict:
+    """Map one row of serving_features_sql to the model input. Keys are
+    app.ml.train.FEATURE_COLS (same names, same defaults) plus display-only extras."""
+    from app.ml.train import FEATURE_COLS
+
+    out = {c: float(row[c] or 0) for c in FEATURE_COLS if c != "adherence_trend"}
+    out["age"] = int(row["age"] or 0)
+    out["adherence_trend"] = out["adherence_rate_90d"] - out["adherence_rate_1y_ago"]
+    arch = row.get("adherence_archetype")
+    out.update({
+        "er_visits_1y": int(row.get("er_visits_1y") or 0),
+        "refills_6m": int(row.get("refills_6m") or 0),
+        **{f"arch_{a}": 1 if arch == a else 0 for a in ("excellent", "good", "moderate", "poor", "erratic")},
+    })
+    return out
+
+
+async def get_patient_features(patient_id: str, index_date: date | None = None) -> dict | None:
+    """Model features for one patient, computed exactly as in training.
+
+    index_date defaults to serving_index_date(latest encounter in the data)."""
     try:
         pid = uuid_mod.UUID(patient_id)
     except ValueError:
         return None
 
     async with get_session() as session:
-        result = await session.execute(
-            text("""
-                SELECT p.age, p.gender, p.bmi, p.smoker, p.n_sdoh_risks,
-                       p.insurance_type, p.adherence_archetype,
-                       (SELECT COUNT(*) FROM diagnoses WHERE patient_id = p.patient_id) as n_diagnoses,
-                       (SELECT COUNT(*) FROM medications WHERE patient_id = p.patient_id AND active = true) as n_active_meds,
-                       (SELECT COUNT(*) FROM encounters WHERE patient_id = p.patient_id
-                        AND encounter_type = 'er' AND encounter_date >= CURRENT_DATE - INTERVAL '365 days') as er_visits_1y,
-                       (SELECT COALESCE(ROUND(AVG(CASE WHEN taken THEN 1.0 ELSE 0.0 END)::numeric * 100, 1), 0)
-                        FROM adherence_events WHERE patient_id = p.patient_id
-                        AND event_date >= CURRENT_DATE - INTERVAL '90 days') as adherence_rate_90d,
-                       (SELECT COALESCE(ROUND(AVG(CASE WHEN taken THEN 1.0 ELSE 0.0 END)::numeric * 100, 1), 0)
-                        FROM adherence_events WHERE patient_id = p.patient_id
-                        AND event_date >= CURRENT_DATE - INTERVAL '365 days'
-                        AND event_date < CURRENT_DATE - INTERVAL '275 days') as adherence_rate_1y_ago,
-                       (SELECT COALESCE(AVG(response_latency_min)::numeric, 30)
-                        FROM adherence_events WHERE patient_id = p.patient_id AND taken = true
-                        AND event_date >= CURRENT_DATE - INTERVAL '90 days') as avg_response_latency,
-                       (SELECT COUNT(*) FROM pharmacy_refills WHERE patient_id = p.patient_id
-                        AND refill_date >= CURRENT_DATE - INTERVAL '180 days') as refills_6m,
-                       (SELECT COALESCE(AVG(v.systolic_bp), 120) FROM vitals v WHERE v.patient_id = p.patient_id) as avg_sbp,
-                       (SELECT COALESCE(AVG(v.heart_rate), 75) FROM vitals v WHERE v.patient_id = p.patient_id) as avg_hr
-                FROM patients p WHERE p.patient_id = :pid
-            """), {"pid": str(pid)}
-        )
-        row = result.first()
+        if index_date is None:
+            index_date = serving_index_date((await session.execute(text(_DATA_AS_OF_SQL))).scalar())
+        result = await session.execute(text(serving_features_sql()), {"pid": str(pid), "idx": index_date})
+        row = result.mappings().first()
         if not row:
             return None
-
-        adh_90d = float(row.adherence_rate_90d or 0)
-        adh_1y = float(row.adherence_rate_1y_ago or 0)
-
-        return {
-            "age": row.age, "gender_M": 1 if row.gender == "M" else 0,
-            "bmi": row.bmi or 25.0, "smoker": 1 if row.smoker else 0,
-            "n_sdoh_risks": row.n_sdoh_risks or 0,
-            "insurance_medicaid": 1 if row.insurance_type == "medicaid" else 0,
-            "insurance_medicare": 1 if row.insurance_type == "medicare" else 0,
-            "insurance_private": 1 if row.insurance_type == "private" else 0,
-            "insurance_uninsured": 1 if row.insurance_type == "uninsured" else 0,
-            "n_diagnoses": row.n_diagnoses or 0, "n_active_meds": row.n_active_meds or 0,
-            "er_visits_1y": row.er_visits_1y or 0,
-            "adherence_rate_90d": adh_90d, "adherence_rate_1y_ago": adh_1y,
-            "adherence_trend": adh_90d - adh_1y,
-            "avg_response_latency": float(row.avg_response_latency or 30),
-            "refills_6m": row.refills_6m or 0,
-            "avg_sbp": float(row.avg_sbp or 120), "avg_hr": float(row.avg_hr or 75),
-            "arch_excellent": 1 if row.adherence_archetype == "excellent" else 0,
-            "arch_good": 1 if row.adherence_archetype == "good" else 0,
-            "arch_moderate": 1 if row.adherence_archetype == "moderate" else 0,
-            "arch_poor": 1 if row.adherence_archetype == "poor" else 0,
-            "arch_erratic": 1 if row.adherence_archetype == "erratic" else 0,
-        }
+        return features_from_row(dict(row))
 
 
 async def get_longitudinal_analysis(patient_id: str) -> dict:
