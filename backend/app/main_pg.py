@@ -183,6 +183,7 @@ async def list_patients(
 @limiter.limit(f"{settings.rate_limit_per_minute}/minute")
 async def quick_search(request: Request, q: str = "",
     user=Depends(require_role(["admin", "physician", "nurse", "coordinator"]))):
+    await log_audit(user["username"], user["role"], "search_patients", "quick_search")
     return await search_patients(q=q, page=1, page_size=20)
 
 
@@ -255,6 +256,7 @@ async def missed_doses(request: Request, patient_id: str,
     user=Depends(require_role(["admin", "physician", "nurse", "coordinator"]))):
     """FR-3.3.4: Check for 3+ consecutive missed doses → care team alert."""
     result = await check_missed_doses(patient_id)
+    await log_audit(user["username"], user["role"], "view_missed_doses", patient_id, patient_id=patient_id)
     return result
 
 
@@ -276,6 +278,7 @@ async def trust_score_single(request: Request, patient_id: str, medication_name:
     """Compute trust score for a specific medication."""
     result = await compute_trust_score(patient_id, medication_name)
     result["medication_name"] = medication_name
+    await log_audit(user["username"], user["role"], "view_trust_score", patient_id, patient_id=patient_id)
     return result
 
 
@@ -323,6 +326,7 @@ async def adherence_trend(request: Request, patient_id: str,
     user=Depends(require_role(["admin", "physician", "nurse", "coordinator"]))):
     detail = await get_patient_detail(patient_id)
     if not detail: raise HTTPException(404, "Patient not found")
+    await log_audit(user["username"], user["role"], "view_adherence_trend", patient_id, patient_id=patient_id)
     return {"recent_adherence": detail.get("recent_adherence", [])}
 
 
@@ -413,6 +417,7 @@ async def override_prediction(request: Request, patient_id: str, body: OverrideR
 async def stats(request: Request,
     user=Depends(require_role(["admin", "physician", "nurse", "coordinator"]))):
     dashboard = await get_dashboard_stats()
+    await log_audit(user["username"], user["role"], "view_stats", "dashboard")
     if METRICS: dashboard["model_metrics"] = METRICS
     return dashboard
 

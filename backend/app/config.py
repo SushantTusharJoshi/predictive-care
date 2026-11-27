@@ -8,8 +8,9 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    database_url: str = "postgresql+asyncpg://pc_user:pc_local_dev_2024@localhost:5432/predictive_care"
-    database_url_sync: str = "postgresql://pc_user:pc_local_dev_2024@localhost:5432/predictive_care"
+    # No password in code: set DATABASE_URL / DATABASE_URL_SYNC in .env or the host's variables
+    database_url: str = "postgresql+asyncpg://pc_user@localhost:5432/predictive_care"
+    database_url_sync: str = "postgresql://pc_user@localhost:5432/predictive_care"
     db_pool_size: int = 20
     db_max_overflow: int = 10
     jwt_secret: str = "dev-secret-change-in-prod"

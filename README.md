@@ -1,6 +1,8 @@
 # PredictiveCare
 
-An AI-powered clinical risk prediction platform that predicts patient ER visit risk, care needs, and medication adherence failure — before they happen. Built to the architectural standard of enterprise EHR platforms, on an open stack.
+A clinical risk prediction platform that predicts ER visit risk, care needs and medication adherence problems, explains each prediction, and keeps a clinician in the loop.
+
+> Synthetic data only. Not clinically validated and not for clinical use.
 
 **Stack:** FastAPI · PostgreSQL 16 · XGBoost/LightGBM · SHAP · Groq AI · Next.js 15
 
@@ -12,33 +14,25 @@ An AI-powered clinical risk prediction platform that predicts patient ER visit r
 
 ---
 
-## What No Other Platform Does
+## What It Adds
 
-Commercial EHR platforms (Epic, Cerner, Athena) surface risk scores. They do not explain them, act on them proactively, or learn from clinician disagreement. PredictiveCare closes that loop end-to-end:
-
-| Capability | Epic / Cerner | PredictiveCare |
-|---|---|---|
-| Risk prediction | ✓ (black box) | ✓ Ensemble ML with SHAP explainability per patient |
-| Narrative explanation | ✗ | ✓ Groq LLM generates plain-English risk summaries |
-| Medication trust scoring | ✗ | ✓ Per-patient-per-medication behavioral trust score |
-| Proactive tiered reminders | ✗ | ✓ 15-min / 5-min / dose-due / 10-min-missed cycles |
-| Human-in-the-loop gate | ✗ | ✓ No autonomous scheduling; clinician approval required |
-| Clinician feedback loop | ✗ | ✓ Overrides and ratings feed model retraining pipeline |
-| HIPAA de-identification before LLM | ✗ | ✓ PHI stripped before any Groq API call |
-| Bias audit | ✗ | ✓ Archetype distribution fairness monitoring |
-| Open deployable stack | ✗ (vendor lock-in) | ✓ FastAPI + PostgreSQL + Railway/Vercel |
-
-The core insight: **risk prediction is useless without trust-weighted action**. If a patient has a low adherence trust score, a reminder alone won't work — it needs escalation. PredictiveCare is the only open platform that chains prediction → trust scoring → tiered intervention → clinician gate into a single pipeline.
+- **Explained predictions:** ensemble ML with SHAP attributions for every patient.
+- **Plain-English narratives:** an LLM turns de-identified SHAP output into a short summary, with a template fallback when the LLM is unavailable.
+- **Medication trust scoring:** a per-patient, per-medication behavioural signal that sets the reminder tier.
+- **Tiered reminders:** 15-minute, 5-minute, dose-due and 10-minutes-missed cycles.
+- **Clinician gate:** nothing is scheduled automatically; recommendations need clinician approval.
+- **De-identification before any LLM call:** names, birth date, address, ZIP and identifiers are stripped first.
+- **Open, deployable stack:** FastAPI, PostgreSQL, Railway and Vercel.
 
 ---
 
 ## ML Architecture
 
 ### Ensemble Models
-- **XGBoost + LightGBM** ensemble trained on a 50K-patient random sample drawn from a 100K-patient Synthea-based synthetic cohort
+- **XGBoost + LightGBM** ensemble. The metrics below come from `train_standalone.py`, which generates its own 50,000 synthetic patients in memory; they are not from the 100K-patient Postgres cohort. A retrain from Postgres, with a calibration slice and a logistic regression baseline, is in progress
 - **True temporal train/test split**: oldest 80% of patients train the model, newest 20% are held out for evaluation — no future data leaks into training (an earlier version used random splits and hit AUC=1.0 due to data leakage; this was caught and corrected)
 
-### Prediction Horizons (Temporal Split, 50K-Patient Training Sample)
+### Prediction Horizons (Temporal Split, 50K In-Memory Synthetic Patients)
 | Model | AUC | Precision | Recall | F1 | Algorithm | Notes |
 |---|---|---|---|---|---|---|
 | ER Visit (30d) | 0.74 | 0.49 | 0.64 | 0.56 | LightGBM | Primary triage signal |
@@ -46,7 +40,7 @@ The core insight: **risk prediction is useless without trust-weighted action**. 
 | Care Need (30d) | 0.67 | 0.21 | 0.50 | 0.30 | LightGBM | Short-horizon intervention |
 | Adherence Trust Score | — | — | — | — | Behavioral | Per-patient, not predictive |
 
-> **Note**: Metrics above are from `train_standalone.py` on synthetic data with a true temporal split. Real clinical data would likely yield higher AUC (0.75–0.85) due to richer feature signals.
+> **Note**: Metrics above are from `train_standalone.py` on in-memory synthetic data with a true temporal split. They say nothing about performance on real patients.
 
 ### Top Predictive Features (by importance)
 1. BMI
@@ -62,19 +56,22 @@ Every prediction surfaces per-patient feature attribution via SHAP values. The G
 
 ## Data Scale
 
-- **100K synthetic patients** with 5 years of longitudinal data
-- **215M+ adherence events** generated across the synthetic cohort
+- **100K synthetic patients** with 5 years of longitudinal data, in the local development database
+- **215M+ adherence events** generated across that cohort
+- The hosted demo runs on a small synthetic subset
 - PostgreSQL 16 with async SQLAlchemy ORM and indexed lookups
 - Risk scores pre-computed at startup; no per-request ML inference on patient lists (eliminates timeout risk)
 
 ---
 
-## HIPAA Compliance Architecture
+## Privacy Controls (HIPAA-aligned)
 
-- Every PHI access audit-logged with IP, user, patient_id, and timestamp
-- De-identification pipeline strips names, DOB, ZIP, and identifiers before any LLM call
-- RBAC with 5 roles: Admin, Physician, Nurse, Care Coordinator, Pharmacist
-- JWT authentication on all endpoints
+These are design controls, not a compliance claim: a real deployment would also need a business associate agreement, a risk assessment and written policies.
+
+- Every read of patient data writes an audit-log row (user, role, patient, time); [a test](backend/tests/test_audit_coverage.py) fails if a route forgets
+- De-identification strips names, date of birth, address, ZIP and identifiers before any LLM call
+- RBAC with 4 roles: Admin, Physician, Nurse, Care Coordinator
+- JWT authentication on every patient endpoint
 
 ---
 
@@ -101,7 +98,7 @@ Trust score drives reminder dispatch tier:
 | LLM | Groq API (`openai/gpt-oss-120b` by default, `GROQ_MODEL` to change) |
 | Frontend | Next.js 15, React 19, Recharts, Tailwind CSS |
 | Auth | JWT RBAC |
-| CI/CD | GitHub Actions, weekly model retraining |
+| CI/CD | GitHub Actions (lint, tests) |
 | Deploy | Railway (backend) + Vercel (frontend) |
 
 ---
@@ -158,12 +155,6 @@ Demo accounts use the username as the password and exist only when demo logins a
 | coordinator | coordinator | Care Coordinator |
 | dr.patel | dr.patel | Physician |
 | rn.williams | rn.williams | Nurse |
-
----
-
-## Market Context
-
-The clinical AI market is dominated by Epic's proprietary models and point solutions (Sepsis prediction tools, readmission risk models) that are siloed, unexplainable, and inaccessible to smaller health systems. PredictiveCare is positioned as the open alternative: a full-stack prediction + intervention + feedback platform that any health system can self-host, audit, and extend — without vendor lock-in or black-box risk scores.
 
 ---
 
