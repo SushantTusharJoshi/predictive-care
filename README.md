@@ -52,6 +52,13 @@ Drawn from the code in `backend/app`: every box is a module, and every arrow is 
 ### Data and labels
 
 - Postgres tables seeded by `app.data.ingest_synthea` (Synthea CSVs, or `--fallback` for generated patients).
+- Planted outcome signal: the generator draws encounter types at random, so on its own there is nothing to learn.
+  `app.data.rearrange_outcomes` (run at the end of `--fallback`, or standalone on an existing database) keeps every
+  encounter row, date and type count and only moves the acute types (ER, urgent care, inpatient) toward patients
+  with a higher risk under a documented rule: age, chronic diagnoses (heart failure, COPD, CKD and diabetes weigh
+  most), smoking, SDOH count, BMI extremes, and poor or erratic adherence from the adherence events. The rule uses
+  only data from before the index date and never the archetype label. It is seeded and idempotent. The rule and
+  its weights are in the module header and the [model card](docs/model-card.md).
 - Index date = latest encounter minus 90 days. Features (17: demographics, insurance, diagnosis and medication
   counts, adherence now and a year earlier, response latency, vitals) use only events before it; labels use the
   30 or 90 days after it: `er_visit_30d`, `care_need_30d`, `care_need_90d`.
@@ -72,32 +79,46 @@ python -m app.ml.train --source memory --n 2000       # tiny in-memory run, no d
 python -m app.ml.report data/models/metrics.json      # print the tables below
 ```
 
-### Metrics (demo scale, synthetic)
+### Metrics (synthetic data, planted signal)
 
-From [docs/metrics/postgres-demo-600.json](docs/metrics/postgres-demo-600.json): 600 patients seeded with
-`ingest_synthea --fallback --max-patients 600`, trained with `python -m app.ml.train` on 2026-11-27 (version `20261127T180858Z-2b2ebb2`).
-Test slice: 120 patients.
+Read these as a check that the pipeline recovers a known, planted signal. They say nothing about clinical
+validity: the patients are synthetic and the link between features and outcomes was put there by the rule above.
 
-| Target | Selected | ROC-AUC | PR-AUC | Brier | Threshold | Precision | Recall | F1 | Calibrated |
-|---|---|---|---|---|---|---|---|---|---|
-| er_visit_30d | logreg | 0.462 | 0.047 | 0.227 | 0.500 | 0.021 | 0.500 | 0.040 | no (0 positives in calibration slice) |
-| care_need_90d | logreg | 0.523 | 0.180 | 0.123 | 0.168 | 0.157 | 0.471 | 0.235 | yes, sigmoid (ECE 0.360 to 0.051) |
-| care_need_30d | logreg | 0.383 | 0.042 | 0.243 | 0.446 | 0.028 | 0.400 | 0.052 | no (3 positives in calibration slice) |
+Run on 2026-11-27 against a throwaway Postgres seeded with `ingest_synthea --fallback --max-patients 1000`
+(1,000 synthetic patients, 17,615 encounters), trained with `python -m app.ml.train`. Test slice: the newest 200
+patients. Precision, recall and F1 are at the decision threshold chosen on the calibration slice (the one that
+maximises F1 there), not at 0.5; metrics.json records it under `targets.<target>.threshold` and also reports
+`f1_at_0_5`.
 
-Test ROC-AUC per candidate (logreg / XGBoost / LightGBM / ensemble): er_visit_30d 0.462 / 0.568 / 0.525 / 0.534,
-care_need_90d 0.523 / 0.427 / 0.399 / 0.404, care_need_30d 0.383 / 0.485 / 0.511 / 0.497.
+After `rearrange_outcomes`, from [docs/metrics/postgres-1000-planted.json](docs/metrics/postgres-1000-planted.json)
+(version `20261127T205414Z-e025414`):
 
-These are chance-level, and that is the honest result: the fallback generator draws encounters independently of
-every feature, so there is nothing to learn, and 2 to 17 test positives per target leave wide error bars.
+| Target | Selected | ROC-AUC | PR-AUC | Brier | Threshold | Precision | Recall | F1 | Calibrated | Test positives |
+|---|---|---|---|---|---|---|---|---|---|---|
+| er_visit_30d | logreg | 0.829 | 0.155 | 0.190 | 0.961 | 0.125 | 0.111 | 0.118 | no (5 positives in calibration slice) | 9 |
+| care_need_90d | XGBoost | 0.681 | 0.281 | 0.133 | 0.163 | 0.227 | 0.625 | 0.333 | yes, sigmoid (ECE 0.181 to 0.063) | 32 |
+| care_need_30d | XGBoost | 0.640 | 0.151 | 0.106 | 0.247 | 0.140 | 0.375 | 0.203 | no (8 positives in calibration slice) | 16 |
 
-Sanity check that the pipeline does learn when there is signal, from
-[docs/metrics/memory-sanity-20k.json](docs/metrics/memory-sanity-20k.json)
+Before, same database with the generator's uniform encounter types, from
+[docs/metrics/postgres-1000-before.json](docs/metrics/postgres-1000-before.json): test ROC-AUC 0.417 / 0.555 /
+0.408 and F1 0.071 / 0.252 / 0.088 (thresholds 0.051 / 0.170 / 0.496) for er_visit_30d / care_need_90d /
+care_need_30d. At a fixed 0.5 threshold care_need_90d had F1 = 0.
+
+Test ROC-AUC per candidate after rearranging (logreg / XGBoost / LightGBM / ensemble): er_visit_30d 0.829 / 0.771 /
+0.750 / 0.764, care_need_90d 0.723 / 0.681 / 0.692 / 0.689, care_need_30d 0.671 / 0.640 / 0.628 / 0.631. The
+choice is made on a 100-patient calibration slice with 5 to 17 positives, so it is noisy; the test slice has 9 to
+32 positives, so every number has a wide margin of error. Over eight other draws of a 1,000-patient in-memory cohort
+with the same rule, care_need_90d test ROC-AUC ranged from 0.64 to 0.77.
+
+Sanity check without the database, from [docs/metrics/memory-sanity-20k.json](docs/metrics/memory-sanity-20k.json)
 (`python -m app.ml.train --source memory --n 20000`, outcomes drawn from a logistic function of the features):
 test ROC-AUC 0.689 / 0.691 / 0.695 for the three targets, with sigmoid calibration lowering ECE to 0.014 / 0.021 /
-0.017. The logistic baseline wins there by 0.004 to 0.012, as expected for a logistic ground truth.
+0.017.
 
 Fairness: the same run reports error rates per adherence archetype on the test slice (admin page, Bias Audit tab).
-Only care_need_90d has two groups with enough cases (5+ positives and negatives), and their gap is within noise.
+For care_need_90d four groups have enough cases (5+ positives and negatives); with 5 to 11 positives each, their
+gaps are within noise. The planted rule makes poor adherence a risk factor, so that group is flagged more often by
+design.
 
 Details, limits and the reliability numbers: [model card](docs/model-card.md).
 
@@ -180,6 +201,9 @@ python -c "from passlib.context import CryptContext; print(CryptContext(schemes=
   `BEDROCK_DAILY_CAP`, `GUARDRAIL_DAILY_CAP`, `MODEL_S3_URI`, `MODEL_VERSION`. AWS policy: [infra/aws/](infra/aws/README.md).
 - Deploys run from `main` only after the required checks (lint, test, narrative-eval) pass. Railway cannot read
   this repo directly, so the deploy is a manual `railway up` from `main`, not an automatic one.
+- To plant the outcome signal in an existing database without regenerating it, run once in the backend
+  service: `python -m app.data.rearrange_outcomes --dry-run` (writes nothing), then
+  `python -m app.data.rearrange_outcomes`, then retrain. A second run changes 0 rows.
 - After this series is merged, retrain on Railway with the new script, `python -m app.ml.train`. The API no longer
   loads the old unhashed `models.pkl`, so predictions show "Models not loaded" until then. `/health` reports
   `models_loaded` and `model_version`.
@@ -201,12 +225,14 @@ Each function below has a `# What it does` / `# Catch it` / `# Card` header and 
 | Narrative chain | [services/narratives.py](backend/app/services/narratives.py) `narrate` | Cache, Guardrails, provider then fallback, checks; template on any no ([card](docs/cards/narrative-chain.md)) |
 | Yes-streak | [services/trust_score.py](backend/app/services/trust_score.py) `consecutive_yes_streak` | One pass, reset on a miss ([card](docs/cards/yes-streak.md)) |
 | Role check | [services/auth.py](backend/app/services/auth.py) `require_role` | Role allowed, then action permission with the demo flag ([card](docs/cards/rbac-demo.md)) |
+| Planted risk | [data/rearrange_outcomes.py](backend/app/data/rearrange_outcomes.py) `planted_risk` | Documented rule from pre-index features only ([card](docs/cards/planted-risk.md)) |
+| Rearrange | [data/rearrange_outcomes.py](backend/app/data/rearrange_outcomes.py) `rearrange_encounters` | Seeded weighted draw moves acute types; rows and counts kept ([card](docs/cards/rearrange-outcomes.md)) |
 
 ## Known limits
 
 | Limit | Impact |
 |---|---|
-| Synthetic data with no feature-outcome link in the fallback generator | Demo metrics are chance-level; nothing here says how the model would do on real patients |
+| Synthetic data; the feature-outcome link is planted by a documented rule | Metrics show the pipeline recovers a known signal; nothing here says how the model would do on real patients |
 | Small demo cohort | Calibration is skipped for two of three targets; test metrics have wide error bars |
 | Fairness reported by archetype only, on too few cases | No group comparison can be trusted yet; race and sex not reported |
 | Narrative cache, daily caps and rate limits are in-process | Each worker counts separately; restarts reset them |
