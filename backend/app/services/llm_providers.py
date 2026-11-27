@@ -65,8 +65,11 @@ class GroqProvider:
             raise ProviderError(f"groq request failed ({type(e).__name__})") from e
         if resp.status_code != 200:
             raise ProviderError(f"groq returned {resp.status_code}")
-        data = resp.json()
-        text = (data["choices"][0]["message"].get("content") or "").strip()
+        try:
+            data = resp.json()
+            text = (data["choices"][0]["message"].get("content") or "").strip()
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+            raise ProviderError(f"groq returned a malformed body ({type(e).__name__})") from e
         if not text:
             raise ProviderError("groq returned empty content")
         usage = data.get("usage") or {}
