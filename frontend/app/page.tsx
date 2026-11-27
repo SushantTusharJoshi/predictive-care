@@ -49,15 +49,19 @@ export default function LoginPage() {
           HIPAA-Compliant · XGBoost/LightGBM · SHAP Explainability
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <input placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
-          <input placeholder="Password" type="password" value={password} onChange={e => setPassword(e.target.value)}
-                 onKeyDown={e => e.key === 'Enter' && handleLogin()} />
-          {error && <div style={{ color: 'var(--red)', fontSize: 13 }}>{error}</div>}
-          <button className="btn btn-primary" onClick={handleLogin} disabled={loading}>
+        <form onSubmit={handleLogin} aria-label="Sign in"
+              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <label htmlFor="login-username" className="sr-only">Username</label>
+          <input id="login-username" name="username" autoComplete="username" placeholder="Username"
+                 value={username} onChange={e => setUsername(e.target.value)} />
+          <label htmlFor="login-password" className="sr-only">Password</label>
+          <input id="login-password" name="password" autoComplete="current-password" placeholder="Password"
+                 type="password" value={password} onChange={e => setPassword(e.target.value)} />
+          {error && <div role="alert" style={{ color: 'var(--red)', fontSize: 13 }}>{error}</div>}
+          <button type="submit" className="btn btn-primary" disabled={loading}>
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
-        </div>
+        </form>
 
         {showDemoLogins && <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 12, color: 'var(--tx3)', marginBottom: 8 }}>Quick Login (Demo)</div>

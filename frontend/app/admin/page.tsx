@@ -271,7 +271,7 @@ function AuditLogTab({ events }: { events: any[] }) {
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <input placeholder="Search audit log..." value={search}
+        <input aria-label="Search audit log" placeholder="Search audit log..." value={search}
           onChange={e => setSearch(e.target.value)}
           style={{ width: '100%', maxWidth: 400 }} />
       </div>

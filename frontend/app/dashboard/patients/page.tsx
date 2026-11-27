@@ -58,24 +58,25 @@ export default function PatientsPage() {
 
         {/* Search + Filters */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-          <input style={{ flex: 1, minWidth: 250 }}
+          <input style={{ flex: 1, minWidth: 250 }} aria-label="Search patients by name or patient ID"
             placeholder="Search by name or patient ID..."
             value={query}
             onChange={e => { setQuery(e.target.value); setPage(1); }}
           />
-          <select value={archetype} onChange={e => { setArchetype(e.target.value); setPage(1); }}>
+          <select aria-label="Filter by adherence archetype" value={archetype} onChange={e => { setArchetype(e.target.value); setPage(1); }}>
             <option value="">All Archetypes</option>
             {['excellent', 'good', 'moderate', 'poor', 'erratic'].map(a => (
               <option key={a} value={a}>{a}</option>
             ))}
           </select>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <select aria-label="Sort by" value={sortBy} onChange={e => setSortBy(e.target.value)}>
             <option value="last_name">Name</option>
             <option value="age">Age</option>
             <option value="bmi">BMI</option>
             <option value="n_sdoh_risks">SDOH Risks</option>
           </select>
-          <button className="btn btn-secondary" onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}>
+          <button className="btn btn-secondary" onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+            aria-label={`Sort direction: ${sortDir === 'asc' ? 'ascending' : 'descending'}`}>
             {sortDir === 'asc' ? '↑' : '↓'}
           </button>
         </div>

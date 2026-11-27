@@ -65,6 +65,14 @@ input, select {
 }
 input:focus, select:focus { border-color: var(--accent); }
 
+/* Visible keyboard focus. :focus-visible leaves mouse clicks on buttons and links
+   unchanged; text inputs show the ring whenever they have focus. The :where() keeps
+   specificity low so a component can still restyle its own ring. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .nav-link {
   padding: 8px 16px;
   border-radius: 8px;
