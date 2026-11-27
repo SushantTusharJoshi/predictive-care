@@ -2,6 +2,8 @@
 
 Every provider here is a stub: no network, no AWS, no Groq key.
 """
+import re
+
 import httpx
 import pytest
 
@@ -376,3 +378,42 @@ def test_comma_list_with_one_wrong_direction_fails():
 def test_shared_verb_after_and():
     assert check_shap("Low recent adherence and BMI raise the score.", TOP).ok
     assert not check_shap("Recent adherence and age raise the score.", TOP).ok
+
+
+# ━━━ Uncalibrated scores: rank, never a percentage ━━━
+
+class TestUncalibratedNarrative:
+    UNCAL = {"probability": 0.96, "calibrated": False, "percentile": 92.0, "top_features": TOP}
+
+    def test_template_has_no_percentage(self):
+        for pct in (5.0, 50.0, 92.0, None):
+            text = narratives._fallback_narrative("er_visit_30d", 0.96, TOP, calibrated=False, percentile=pct)
+            assert not narratives.PERCENT.search(text), text
+            assert not re.search(r"\bhigh\b", text)
+            assert check_narrative(text, TOP).ok
+
+    def test_template_describes_rank(self):
+        text = narratives._fallback_narrative("er_visit_30d", 0.96, TOP, calibrated=False, percentile=92.0)
+        assert "higher than most patients" in text
+
+    def test_prompt_has_rank_not_probability(self):
+        prompt = narratives.shap_prompt(PATIENT, self.UNCAL, "er_visit_30d")
+        assert "96" not in prompt and "Probability:" not in prompt
+        assert "higher than most patients" in prompt
+
+    def test_llm_percentage_falls_back_to_template(self, monkeypatch):
+        monkeypatch.setenv("GROQ_API_KEY", "x")
+        out = run({"groq": Stub("groq"), "bedrock": Stub("bedrock", available=False)}, pred=self.UNCAL)
+        assert out["source"] == "template"
+        assert not narratives.PERCENT.search(out["narrative"])
+
+    def test_llm_without_percentage_is_kept(self, monkeypatch):
+        text = ("This patient's ER visit score is higher than most patients. Low recent adherence raises the "
+                "model's score the most, and BMI also raises it, while younger age lowers it. "
+                "Clinician review recommended.")
+        out = run({"groq": Stub("groq", text=text), "bedrock": Stub("bedrock", available=False)}, pred=self.UNCAL)
+        assert out["source"].startswith("llm:"), out
+
+    def test_calibrated_label_unchanged(self):
+        assert narratives.risk_label(0.81)["risk_level"] == "high"
+        assert narratives.risk_label(0.81, calibrated=False, percentile=10)["risk_level"] == "below_typical"

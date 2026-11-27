@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 
@@ -167,8 +168,13 @@ def shap_prompt(patient_detail: dict, prediction_info: dict, prediction_type: st
     factors = "\n".join(
         f"- {f['feature']}: value={float(f.get('value', 0) or 0):.2f}, impact={f['shap_value']:+.3f} "
         f"({'raises' if f['shap_value'] > 0 else 'lowers'} risk)" for f in top)
+    if prediction_info.get("calibrated", True):
+        score_line = f"Probability: {prediction_info.get('probability', 0):.1%}"
+    else:  # uncalibrated scores rank patients; they are not probabilities
+        score_line = (f"Relative risk: {_label_of(prediction_info)['risk_label']} "
+                      "(uncalibrated score: describe the rank only, never a percentage)")
     return f"""Prediction: {prediction_type.replace('_', ' ')}
-Probability: {prediction_info.get('probability', 0):.1%}
+{score_line}
 
 Patient (de-identified): age {safe.get('age', 'N/A')}, BMI {safe.get('bmi', 'N/A')},
 active conditions {len(safe.get('diagnoses', []))}, insurance {safe_insurance(safe.get('insurance_type'))},
@@ -182,13 +188,41 @@ each whether it raises or lowers the model's score. End with: "Clinician review 
 Under 110 words, no headers or bullets."""
 
 
-def _fallback_narrative(prediction_type: str, probability: float, top_features: list) -> str:
-    risk_level = "high" if probability > 0.7 else ("moderate" if probability > 0.4 else "low")
+PERCENT = re.compile(r"\d\s*(%|percent\b)", re.IGNORECASE)
+
+
+def risk_label(probability: float, calibrated: bool = True, percentile: float | None = None) -> dict:
+    """risk_level plus a plain label. Calibrated scores use probability bands; uncalibrated
+    scores are not probabilities, so they are described by rank against the training cohort."""
+    if calibrated:
+        level = "high" if probability > 0.7 else ("moderate" if probability > 0.4 else "low")
+        return {"risk_level": level, "risk_label": f"{level} risk"}
+    if percentile is None:
+        return {"risk_level": "unranked", "risk_label": "not ranked (uncalibrated score)"}
+    if percentile >= 75:
+        return {"risk_level": "above_typical", "risk_label": "higher than most patients"}
+    if percentile <= 25:
+        return {"risk_level": "below_typical", "risk_label": "lower than most patients"}
+    return {"risk_level": "typical", "risk_label": "about typical for this patient group"}
+
+
+def _label_of(prediction_info: dict) -> dict:
+    return risk_label(prediction_info.get("probability", 0) or 0, prediction_info.get("calibrated", True),
+                      prediction_info.get("percentile"))
+
+
+def _fallback_narrative(prediction_type: str, probability: float, top_features: list,
+                        calibrated: bool = True, percentile: float | None = None) -> str:
     pred_name = prediction_type.replace("_", " ")
     top = top_features[:3] if top_features else []
     increasing = [f for f in top if f.get("shap_value", 0) > 0]
     decreasing = [f for f in top if f.get("shap_value", 0) < 0]
-    narrative = f"This patient has a {risk_level} {pred_name} risk ({probability:.0%}). "
+    if calibrated:
+        level = risk_label(probability)["risk_level"]
+        narrative = f"This patient has a {level} {pred_name} risk ({probability:.0%}). "
+    else:
+        rank = risk_label(probability, False, percentile)["risk_label"]
+        narrative = f"This patient's {pred_name} risk score is {rank}. "
     if increasing:
         narrative += f"Key risk drivers include {', '.join(f['feature'].replace('_', ' ') for f in increasing[:2])}. "
     if decreasing:
@@ -201,11 +235,17 @@ def shap_narrative_result(patient_detail: dict, prediction_info: dict, predictio
                           model_version: str | None = None, providers=None) -> dict:
     probability = prediction_info.get("probability", 0)
     top = prediction_info.get("top_features", [])
-    template = _fallback_narrative(prediction_type, probability, top)
+    calibrated = prediction_info.get("calibrated", True)
+    template = _fallback_narrative(prediction_type, probability, top, calibrated, prediction_info.get("percentile"))
     pid = (patient_detail or {}).get("patient_id")
-    key = ("shap", pid, prediction_type, model_version, provider_order()[0]) if pid else None
-    return narrate(shap_prompt(patient_detail, prediction_info, prediction_type), template, top,
-                   cache_key=key, providers=providers)
+    key = ("shap", pid, prediction_type, model_version, calibrated, provider_order()[0]) if pid else None
+    result = narrate(shap_prompt(patient_detail, prediction_info, prediction_type), template, top,
+                     cache_key=key, providers=providers)
+    # DECISION: an uncalibrated score must never be read out as a percentage
+    if not calibrated and result["source"] != "template" and PERCENT.search(result["narrative"]):
+        return {"narrative": template, "source": "template", "provider": result.get("provider"),
+                "reason": "percentage in a narrative for an uncalibrated score"}
+    return result
 
 
 async def generate_shap_narrative(patient_detail: dict, prediction_info: dict, prediction_type: str,

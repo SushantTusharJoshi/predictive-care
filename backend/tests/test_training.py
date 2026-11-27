@@ -171,3 +171,66 @@ class TestFairness:
         a, b = out["groups"]
         assert a["enough_data"] is False and b["enough_data"] is True
         assert b["false_positive_rate"] == 1.0 and b["recall"] == 1.0
+
+
+def _rare_er_cohort(n=1500, seed=3):
+    """er_visit_30d thinned to about 5%, so the calibration slice is too small to calibrate."""
+    df, _ = tr.load_memory(n=n, seed=seed)
+    rng = np.random.default_rng(seed)
+    df["er_visit_30d"] = (df.er_visit_30d.astype(bool) & (rng.random(n) < 0.22)).astype(int)
+    df[tr.FEATURE_COLS] = df[tr.FEATURE_COLS].astype(float)
+    return tr.time_split(df)
+
+
+class TestUncalibratedTarget:
+    @pytest.fixture(scope="class")
+    def rare(self):
+        train, cal, test = _rare_er_cohort()
+        model, info = tr.train_target("er_visit_30d", train, cal, test)
+        return model, info, train, test
+
+    def test_balanced_weighting_not_used_by_baseline(self):
+        df, _ = tr.load_memory(n=400, seed=1)
+        logreg = tr.fit_candidates(df[tr.FEATURE_COLS], df["care_need_90d"])["logreg"].logreg
+        assert logreg.named_steps["clf"].class_weight is None
+
+    def test_skipped_calibration_is_recorded(self, rare):
+        model, info, _, _ = rare
+        assert info["calibration"]["status"] == "skipped"
+        assert info["calibrated"] is False and model.calibrated is False
+        assert "prior_shift" in info["calibration"]
+
+    def test_uncalibrated_scores_stay_near_base_rate(self, rare):
+        model, _, train, test = rare
+        p_train = model.predict_proba(train[tr.FEATURE_COLS])[:, 1]
+        assert abs(p_train.mean() - train.er_visit_30d.mean()) < 0.005
+        p_test = model.predict_proba(test[tr.FEATURE_COLS])[:, 1]
+        assert p_test.mean() < 2 * test.er_visit_30d.mean() and p_test.max() < 0.7
+
+    def test_tree_class_weights_are_undone_without_calibration(self, rare):
+        _, _, train, _ = rare
+        X, y = train[tr.FEATURE_COLS], train.er_visit_30d
+        tree = tr.fit_candidates(X, y)["xgboost"]
+        assert tree.raw_proba(X).mean() > 2 * y.mean()   # scale_pos_weight inflates the raw score
+        tr.prior_shift(tree, X, y)
+        assert abs(tree.raw_proba(X).mean() - y.mean()) < 0.005
+
+    def test_metrics_json_records_calibrated_per_target(self, run):
+        metrics, _, _ = run
+        for target in tr.TARGETS:
+            info = metrics["targets"][target]
+            assert info["calibrated"] == (info["calibration"]["status"] == "applied")
+
+    def test_prediction_response_ranks_uncalibrated_target(self, rare):
+        import app.main as m
+        from app.services import narratives
+        model, _, _, test = rare
+        with patch.dict(m.MODELS, {"er_visit_30d": {"model": model, "explainer": model}}, clear=True), \
+                patch.object(m, "FEATURE_COLS", tr.FEATURE_COLS):
+            for _, row in test.head(40).iterrows():
+                pred = m._predict_with_shap(row[tr.FEATURE_COLS].to_dict())["er_visit_30d"]
+                assert pred["calibrated"] is False and pred["percentile"] is not None
+                assert pred["risk_level"] in {"above_typical", "typical", "below_typical"}
+                text = narratives._fallback_narrative("er_visit_30d", pred["probability"], pred["top_features"],
+                                                      pred["calibrated"], pred["percentile"])
+                assert "%" not in text and "percent" not in text.lower()
