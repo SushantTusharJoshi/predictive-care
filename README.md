@@ -6,6 +6,12 @@ An AI-powered clinical risk prediction platform that predicts patient ER visit r
 
 ---
 
+## System Architecture
+
+![PredictiveCare architecture: Next.js frontend calls the FastAPI backend (auth, HIPAA middleware and audit log, trust score, reminders, Groq narratives), which reads and writes PostgreSQL and the ML training and similar-patients modules](docs/architecture.webp)
+
+---
+
 ## What No Other Platform Does
 
 Commercial EHR platforms (Epic, Cerner, Athena) surface risk scores. They do not explain them, act on them proactively, or learn from clinician disagreement. PredictiveCare closes that loop end-to-end:
