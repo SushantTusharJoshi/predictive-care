@@ -7,6 +7,9 @@ Usage:
 
     # Pure synthetic fallback (no Synthea needed):
     python -m app.data.ingest_synthea --fallback --max-patients 100000
+
+The fallback run ends with app.data.rearrange_outcomes, which plants a documented outcome signal by
+rearranging encounter types (pass --no-rearrange to skip it).
 """
 import argparse
 import csv
@@ -115,7 +118,7 @@ def ingest_synthea(synthea_dir: str, max_patients: int = 100_000):
     logger.info("Ingestion complete!")
 
 
-def generate_fallback(n_patients: int = 100_000):
+def generate_fallback(n_patients: int = 100_000, rearrange: bool = True):
     logger.info(f"Generating {n_patients:,} synthetic patients...")
     random.seed(42)
     np.random.seed(42)
@@ -169,6 +172,10 @@ def generate_fallback(n_patients: int = 100_000):
     logger.info(f"  {n_patients:,} patients created")
 
     _generate_all_related_data(SessionLocal, patient_map)
+    if rearrange:
+        # Last step, after the unchanged phases above: give outcomes a documented, planted signal
+        from app.data import rearrange_outcomes
+        rearrange_outcomes.main([])
     logger.info(f"Fallback generation complete: {n_patients:,} patients")
 
 
@@ -406,8 +413,10 @@ if __name__ == "__main__":
     parser.add_argument("--synthea-dir", default="./synthea_output/csv")
     parser.add_argument("--max-patients", type=int, default=100_000)
     parser.add_argument("--fallback", action="store_true", help="Skip Synthea, generate synthetic directly")
+    parser.add_argument("--no-rearrange", action="store_true",
+                        help="fallback only: skip app.data.rearrange_outcomes (encounter types stay uniform)")
     args = parser.parse_args()
     if args.fallback:
-        generate_fallback(args.max_patients)
+        generate_fallback(args.max_patients, rearrange=not args.no_rearrange)
     else:
         ingest_synthea(args.synthea_dir, args.max_patients)
