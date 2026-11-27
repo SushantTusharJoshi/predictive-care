@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Nav from '../../../components/Nav';
 import { api } from '../../../lib/api';
+import { NO_RISK, formatPercent, isUncalibrated, rankLabel, rankOf, topRisk } from '../../../lib/risk';
 
 export default function PatientsPage() {
   const [mounted, setMounted] = useState(false);
@@ -37,11 +38,22 @@ export default function PatientsPage() {
   if (!mounted) return null;
 
   const riskColor = (scores: any) => {
-    if (!scores) return 'var(--tx3)';
-    const max = Math.max(...Object.values(scores).map(Number));
-    if (max > 0.7) return 'var(--red)';
-    if (max > 0.4) return 'var(--yellow)';
+    const top = topRisk(scores);
+    if (!top) return 'var(--tx3)';
+    if (top.prob > 0.7) return 'var(--red)';
+    if (top.prob > 0.4) return 'var(--yellow)';
     return 'var(--green)';
+  };
+
+  // Uncalibrated targets are ranked against the other patients on this page.
+  const riskText = (p: any) => {
+    const top = topRisk(p.risk_scores);
+    if (!top) return NO_RISK;
+    if (!isUncalibrated(p.risk_calibrated, top.target)) return formatPercent(top.prob);
+    const all = data.patients
+      .map((q: any) => q.risk_scores?.[top.target])
+      .filter((v: any) => Number.isFinite(Number(v))).map(Number);
+    return rankLabel(rankOf(top.prob, all), all.length);
   };
 
   return (
@@ -112,7 +124,7 @@ export default function PatientsPage() {
                   </td>
                   <td style={{ padding: '10px 16px' }}>
                     <span style={{ color: riskColor(p.risk_scores), fontWeight: 600 }}>
-                      {p.risk_scores ? Math.max(...Object.values(p.risk_scores).map(Number)).toFixed(0) + '%' : '—'}
+                      {riskText(p)}
                     </span>
                   </td>
                   <td style={{ padding: '10px 16px' }}>

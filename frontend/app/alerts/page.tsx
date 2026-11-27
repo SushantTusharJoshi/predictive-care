@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Nav from '../../components/Nav';
 import { api } from '../../lib/api';
+import { formatPercent, isUncalibrated, rankLabel, rankOf } from '../../lib/risk';
 
 export default function AlertsPage() {
   const [mounted, setMounted] = useState(false);
@@ -21,7 +22,7 @@ export default function AlertsPage() {
     setLoading(true);
     try {
       // Get high-risk patients
-      const res = await api('/patients?page_size=100&sort_by=last_name&sort_dir=asc');
+      const res = await api('/patients?page_size=50&sort_by=last_name&sort_dir=asc');
       const patients = res.patients || [];
       
       const alertList: any[] = [];
@@ -32,6 +33,8 @@ export default function AlertsPage() {
           if (prob > 0.4) {
             alertList.push({
               patient_id: p.patient_id,
+              target: model,
+              uncalibrated: isUncalibrated(p.risk_calibrated, model),
               name: `${p.first_name} ${p.last_name}`,
               age: p.age,
               archetype: p.adherence_archetype,
@@ -44,6 +47,15 @@ export default function AlertsPage() {
       });
 
       alertList.sort((a, b) => b.probability - a.probability);
+      // Uncalibrated scores only order patients: label them by rank within their target.
+      const byTarget: Record<string, number[]> = {};
+      patients.forEach((p: any) => Object.entries(p.risk_scores || {}).forEach(([t, v]) => {
+        if (Number.isFinite(Number(v))) (byTarget[t] ||= []).push(Number(v));
+      }));
+      alertList.forEach(a => {
+        const all = byTarget[a.target] || [];
+        a.display = a.uncalibrated ? rankLabel(rankOf(a.probability, all), all.length) : formatPercent(a.probability);
+      });
       setAlerts(alertList);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -105,7 +117,7 @@ export default function AlertsPage() {
                     fontSize: 18, fontWeight: 700,
                     color: a.risk_level === 'high' ? 'var(--red)' : 'var(--yellow)',
                   }}>
-                    {(a.probability * 100).toFixed(1)}%
+                    {a.display}
                   </div>
                 </div>
               </div>
