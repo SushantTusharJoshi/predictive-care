@@ -108,8 +108,10 @@ CI runs an [llm-eval-kit](https://github.com/SushantTusharJoshi/llm-eval-kit) su
 tolerance, with the mock provider, and a seeded-bad suite that must fail. With a `GROQ_API_KEY` secret it also runs
 the suite on Groq.
 
-Status: Groq, Bedrock and Guardrails are tested with stubs (including botocore's Stubber); live calls are
-implemented but unverified.
+Status: on 2026-11-27 the CI eval ran the suite live on Groq (`openai/gpt-oss-120b`, through llm-eval-kit): 9/9
+cases passed, estimated cost $0.0004, and after the fix below all three narratives pass the exact SHAP check. The
+app's own Groq call path, Bedrock and Guardrails are tested with stubs (including botocore's Stubber); live Bedrock
+and Guardrails calls are implemented but unverified.
 
 ---
 
@@ -190,6 +192,6 @@ Each function below has a `# What it does` / `# Catch it` / `# Card` header and 
 | Small demo cohort | Calibration is skipped for two of three targets; test metrics have wide error bars |
 | Fairness reported by archetype only, on too few cases | No group comparison can be trusted yet; race and sex not reported |
 | Narrative cache, daily caps and rate limits are in-process | Each worker counts separately; restarts reset them |
-| Live Groq, Bedrock and Guardrails calls unverified | Only stub-tested until a key and Bedrock access exist |
+| Live Bedrock and Guardrails calls unverified; the app's Groq client is stub-tested | Groq prompts were run live only through the CI eval |
 | JWT in `localStorage`, no MFA or SSO | See [SECURITY.md](SECURITY.md) |
 | Ingest uses ORM inserts | Large cohorts (100K patients) take hours to load |
