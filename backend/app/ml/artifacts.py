@@ -70,26 +70,35 @@ def read_manifest(model_dir: Path, version: str | None = None) -> dict | None:
     return json.loads(path.read_text()) if path.exists() else None
 
 
+# What it does: loads a model pickle only after its sha256 matches the manifest and the sidecar.
+# Catch it: "pickle.load runs code. How do you make sure the API only loads the model you trained?"
+# Card: docs/cards/verified-artifact.md
 def load_bundle(model_dir: Path, version: str | None = None) -> tuple[dict, dict, dict]:
     """Return (bundle, metrics, manifest). Raise ArtifactError on any mismatch."""
     model_dir = Path(model_dir)
+    # STEP: the manifest names the version, file and expected hash
     manifest = read_manifest(model_dir, version)
+    # DECISION: no manifest or no file means no model, never a guess
     if not manifest:
         raise ArtifactError(f"no model manifest in {model_dir}")
     path = model_dir / manifest["file"]
     if not path.exists():
         raise ArtifactError(f"model file missing: {manifest['file']}")
+    # STEP: hash the bytes we are about to load, not a path we might re-read
     data = path.read_bytes()
     actual = sha256_bytes(data)
     sidecar = model_dir / f"{manifest['file']}.sha256"
     expected = {manifest["sha256"]}
     if sidecar.exists():
         expected.add(sidecar.read_text().split()[0])
+    # DECISION: manifest and sidecar must both agree with the bytes
     if expected != {actual}:
         raise ArtifactError(f"sha256 mismatch for {manifest['file']}: refusing to load")
+    # STEP: only now unpickle those same bytes
     bundle = pickle.loads(data)  # noqa: S301 - hash verified above
     metrics_path = model_dir / manifest.get("metrics", "metrics.json")
     metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else {}
+    # RETURN: bundle plus the metrics and manifest it was trained with
     return bundle, metrics, manifest
 
 

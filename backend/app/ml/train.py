@@ -198,12 +198,20 @@ def load_memory(n: int = 2000, seed: int = SEED) -> tuple[pd.DataFrame, dict]:
 
 # ━━━ Split ━━━
 
+# What it does: orders patients by time and cuts train / calibration / test, oldest first.
+# Catch it: "Your model hit AUC 1.0 on a random split. How do you split so the test set looks like the future?"
+# Card: docs/cards/time-split.md
 def time_split(df: pd.DataFrame, fractions=SPLIT) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Oldest patients train, the next slice calibrates, the newest are the test set."""
+    # STEP: sort by patient time; patient_id breaks ties so the cut is reproducible
     d = df.sort_values(["patient_time", "patient_id"]).reset_index(drop=True)
+    # STEP: count patients once, after sorting
     n = len(d)
+    # STEP: first cut point, end of the 70% train slice
     a = int(round(n * fractions[0]))
+    # STEP: second cut point, end of the 10% calibration slice
     b = int(round(n * (fractions[0] + fractions[1])))
+    # RETURN: three disjoint slices, newest patients last (the test set)
     return d.iloc[:a], d.iloc[a:b], d.iloc[b:]
 
 
@@ -290,17 +298,23 @@ def _fit_calibrator(method, raw, y):
     return LogisticRegression(max_iter=1000).fit(logit, y)
 
 
+# What it does: fits isotonic or sigmoid calibration on the calibration slice only, or refuses.
+# Catch it: "Your model says 30% risk. How do you make 30% mean 30 in 100, without touching the test set?"
+# Card: docs/cards/calibration.md
 def fit_calibration(model: RiskModel, X_cal, y_cal) -> dict:
     """PC-F13: choose isotonic or sigmoid by 5-fold CV Brier inside the calibration
     slice, refit the winner on the whole slice. The test slice is never touched."""
     y_cal = np.asarray(y_cal)
     pos, neg = int(y_cal.sum()), int(len(y_cal) - y_cal.sum())
+    # DECISION: enough of each class to calibrate? if not, skip and say why
     if min(pos, neg) < MIN_CLASS_FOR_CALIBRATION:
         return {"status": "skipped", "reason": f"calibration slice has {pos} positives and {neg} negatives; "
                 f"need {MIN_CLASS_FOR_CALIBRATION} of each", "method": None}
+    # STEP: uncalibrated scores on the calibration slice
     raw = model.raw_proba(X_cal)
     folds = StratifiedKFold(n_splits=min(5, pos, neg), shuffle=True, random_state=SEED)
     cv = {}
+    # LOOP: each method, fit on 4 folds and score Brier on the 5th
     for method in ("isotonic", "sigmoid"):
         losses = []
         for tr, va in folds.split(raw.reshape(-1, 1), y_cal):
@@ -309,12 +323,18 @@ def fit_calibration(model: RiskModel, X_cal, y_cal) -> dict:
             losses.append(brier_score_loss(y_cal[va], probe.calibrate(raw[va])))
         cv[method] = round(float(np.mean(losses)), 5)
     uncal = round(float(brier_score_loss(y_cal, raw)), 5)
+    # DECISION: the lower cross-validated Brier wins
     method = min(cv, key=cv.get)
+    # STEP: refit the winner on the whole calibration slice
     model.calibrator = (method, _fit_calibrator(method, raw, y_cal))
+    # RETURN: what was chosen and why, for metrics.json
     return {"status": "applied", "method": method, "cv_brier": cv, "uncalibrated_brier_on_calibration": uncal,
             "chosen_on": "calibration slice (5-fold CV Brier)"}
 
 
+# What it does: trains one target end to end: candidates, selection, calibration, threshold, one test report.
+# Catch it: "Where do you pick the model and the threshold so your test numbers stay honest?"
+# Card: docs/cards/train-target.md
 def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
     Xtr, Xcal, Xte = train[FEATURE_COLS], cal[FEATURE_COLS], test[FEATURE_COLS]
     ytr, ycal, yte = train[target].astype(int), cal[target].astype(int), test[target].astype(int)
@@ -325,8 +345,10 @@ def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
         info["skipped"] = "training slice has a single class"
         return None, info
 
+    # STEP: fit the baseline and the tree models on the train slice only
     candidates = fit_candidates(Xtr, ytr)
     table = {}
+    # LOOP: score every candidate on calibration (for choosing) and test (for the report)
     for name, m in candidates.items():
         p_cal, p_te = m.raw_proba(Xcal), m.raw_proba(Xte)
         t = best_f1_threshold(ycal, p_cal)
@@ -338,6 +360,7 @@ def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
     def cal_auc(name):
         a = table[name]["calibration"]["roc_auc"]
         return -1 if a is None else a
+    # DECISION: best ROC-AUC on the calibration slice; test numbers play no part
     selected = max(candidates, key=cal_auc)
     model = candidates[selected]
     info["selected"] = selected
@@ -345,12 +368,14 @@ def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
     if all(table[n]["calibration"]["roc_auc"] is None for n in table):
         info["selected_by"] = "calibration slice has one class; fell back to the logistic baseline"
 
+    # STEP: calibration and the F1 threshold, both from the calibration slice
     info["calibration"] = fit_calibration(model, Xcal, ycal)
     p_cal = model.predict_proba(Xcal)[:, 1]
     model.threshold = best_f1_threshold(ycal, p_cal)
     info["threshold"] = {"value": model.threshold, "rule": "max F1", "chosen_on": "calibration slice",
                          "valid": bool(ycal.sum() > 0)}
 
+    # STEP: one look at the untouched test slice
     raw_te, p_te = model.raw_proba(Xte), model.predict_proba(Xte)[:, 1]
     rel_raw, ece_raw = reliability(yte, raw_te)
     rel_cal, ece_cal = reliability(yte, p_te)
@@ -370,6 +395,7 @@ def train_target(target, train, cal, test) -> tuple[RiskModel | None, dict]:
     order = np.argsort(-shap_abs)
     info["feature_importances"] = [{"feature": FEATURE_COLS[i], "mean_abs_shap": round(float(shap_abs[i]), 4)}
                                    for i in order[:10]]
+    # RETURN: the fitted model and everything metrics.json records about it
     return model, info
 
 

@@ -132,14 +132,19 @@ def _segment_claims(clause: str, found) -> list[str | None]:
     return claims
 
 
+# What it does: rejects a narrative that names a feature, direction or ranking the SHAP output does not support.
+# Catch it: "The LLM says BMI lowers risk but SHAP says it raises it. How do you catch that before a clinician reads it?"
+# Card: docs/cards/shap-check.md
 def check_shap(text: str, top_features: list[dict], k: int = 5) -> CheckResult:
     """PC-F3: is every feature the narrative names faithful to this patient's SHAP output?"""
+    # STEP: the top k features by absolute SHAP, ranked
     top = [f for f in top_features[:k] if f.get("shap_value")]
     shap = {f["feature"].lower(): float(f["shap_value"]) for f in top}
     rank = {name: i for i, name in enumerate(sorted(shap, key=lambda n: -abs(shap[n])))}
     reasons: list[str] = []
     low = text.lower()
 
+    # STEP: a clinical term the model never used is unfaithful on sight
     for p in OUT_OF_MODEL:
         m = re.search(p, low)
         if m:
@@ -147,6 +152,7 @@ def check_shap(text: str, top_features: list[dict], k: int = 5) -> CheckResult:
 
     order: dict[str, list[str]] = {"up": [], "down": []}
     mentioned: list[str] = []
+    # LOOP: each clause, and inside it each feature with the words up to the next feature
     for clause in CLAUSE_SPLIT.split(low):
         found = _mentions(clause)
         if not found:
@@ -169,6 +175,7 @@ def check_shap(text: str, top_features: list[dict], k: int = 5) -> CheckResult:
             if not claim:
                 continue  # named without a direction: nothing to contradict
             actual = "up" if shap[feat] > 0 else "down"
+            # DECISION: claimed direction must equal the SHAP sign
             if claim != actual:
                 reasons.append(f"says '{word}' {'raises' if claim == 'up' else 'lowers'} risk; "
                                f"SHAP says it {'raises' if actual == 'up' else 'lowers'} it")
@@ -180,11 +187,13 @@ def check_shap(text: str, top_features: list[dict], k: int = 5) -> CheckResult:
             if best and first_feat != best:
                 reasons.append(f"calls '{first_feat}' the largest factor; SHAP ranks '{best}' higher")
 
+    # DECISION: within each direction, features named in SHAP size order
     for direction, feats in order.items():
         ranks = [rank[f] for f in feats]
         if ranks != sorted(ranks):
             reasons.append(f"{'risk-raising' if direction == 'up' else 'risk-lowering'} factors are "
                            f"named out of SHAP size order: {', '.join(feats)}")
+    # RETURN: ok only with zero reasons
     return CheckResult(ok=not reasons, reasons=list(dict.fromkeys(reasons)), mentioned=mentioned)
 
 
