@@ -61,9 +61,9 @@ def _get(client, token, features=FEATURES):
     return resp.json()["patients"]
 
 
-def test_list_risk_comes_from_the_model(client, physician_token, models):
+def test_list_risk_comes_from_the_model(client, admin_token, models):
     er, care = models
-    rows = _get(client, physician_token)
+    rows = _get(client, admin_token)
     assert [r["risk_scores"]["er_visit_30d"] for r in rows] == [0.3, 0.8]
     assert [r["risk_scores"]["care_need_90d"] for r in rows] == [0.3, 0.8]
     # Same archetype, different model scores: the archetype table is gone.
@@ -73,25 +73,25 @@ def test_list_risk_comes_from_the_model(client, physician_token, models):
     assert er.calls == 1 and care.calls == 1
 
 
-def test_list_reports_calibration_per_target(client, physician_token, models):
-    rows = _get(client, physician_token)
+def test_list_reports_calibration_per_target(client, admin_token, models):
+    rows = _get(client, admin_token)
     assert rows[0]["risk_calibrated"] == {"er_visit_30d": True, "care_need_90d": False}
 
 
-def test_explicit_calibrated_flag_wins(client, physician_token, models):
+def test_explicit_calibrated_flag_wins(client, admin_token, models):
     m.MODELS["er_visit_30d"]["calibrated"] = False
-    rows = _get(client, physician_token)
+    rows = _get(client, admin_token)
     assert rows[0]["risk_calibrated"]["er_visit_30d"] is False
 
 
-def test_no_models_means_no_risk(client, physician_token):
+def test_no_models_means_no_risk(client, admin_token):
     with patch.dict(m.MODELS, {}, clear=True):
-        rows = _get(client, physician_token)
+        rows = _get(client, admin_token)
     assert all(r["risk_scores"] is None and r["risk_calibrated"] is None for r in rows)
 
 
-def test_patient_without_features_gets_no_risk(client, physician_token, models):
-    rows = _get(client, physician_token, features={PIDS[1]: FEATURES[PIDS[1]]})
+def test_patient_without_features_gets_no_risk(client, admin_token, models):
+    rows = _get(client, admin_token, features={PIDS[1]: FEATURES[PIDS[1]]})
     assert rows[0]["risk_scores"] is None
     assert rows[1]["risk_scores"]["er_visit_30d"] == 0.8
 
@@ -99,5 +99,12 @@ def test_patient_without_features_gets_no_risk(client, physician_token, models):
 def test_nurse_sees_no_model_risk(client, nurse_token, models):
     er, _ = models
     rows = _get(client, nurse_token)
+    assert all(r["risk_scores"] is None for r in rows)
+    assert er.calls == 0
+
+
+def test_physician_sees_no_model_risk_on_list(client, physician_token, models):
+    er, _ = models
+    rows = _get(client, physician_token)
     assert all(r["risk_scores"] is None for r in rows)
     assert er.calls == 0
