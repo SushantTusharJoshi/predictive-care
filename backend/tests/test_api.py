@@ -76,3 +76,15 @@ class TestHIPAADataFlow:
     def test_hipaa_accessible_by_admin(self, client, admin_token):
         resp = client.get("/hipaa/data-flow", headers=auth_header(admin_token))
         assert resp.status_code == 200
+
+
+class TestSingleEntryPoint:
+    def test_health_keeps_models_loaded_field(self, client):
+        data = client.get("/health").json()
+        assert isinstance(data["models_loaded"], bool)
+        assert "model_version" in data
+
+    def test_main_pg_is_an_alias_of_main(self):
+        import app.main
+        import app.main_pg
+        assert app.main_pg.app is app.main.app

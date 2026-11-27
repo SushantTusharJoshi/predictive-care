@@ -126,7 +126,7 @@ class TestArtifact:
         assert artifacts.upload(tmp_path, {"file": "x", "metrics": "y"}) is False
 
     def test_api_loads_verified_bundle_and_refuses_tampered(self, run, tmp_path):
-        import app.main_pg as m
+        import app.main as m
         _, model_dir, _ = run
         with patch.object(m.settings, "model_dir", str(model_dir)):
             m.MODELS.clear()
@@ -143,7 +143,7 @@ class TestArtifact:
             assert m.MODELS == {}
 
     def test_prediction_uses_case_insensitive_features(self, run):
-        import app.main_pg as m
+        import app.main as m
         _, model_dir, _ = run
         with patch.object(m.settings, "model_dir", str(model_dir)):
             m.MODELS.clear()

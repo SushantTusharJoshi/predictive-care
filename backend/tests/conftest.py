@@ -17,13 +17,13 @@ def client():
     _db_mod._sync_session_factory = None
 
     with (
-        patch("app.main_pg.init_db", new_callable=AsyncMock),
-        patch("app.main_pg.close_db", new_callable=AsyncMock),
-        patch("app.main_pg.load_models"),
+        patch("app.main.init_db", new_callable=AsyncMock),
+        patch("app.main.close_db", new_callable=AsyncMock),
+        patch("app.main.load_models"),
         patch.object(_db_mod, "get_async_engine", return_value=MagicMock()),
         patch.object(_db_mod, "get_async_session_factory", return_value=MagicMock()),
     ):
-        from app.main_pg import app
+        from app.main import app
 
         app.state.limiter.reset()
         with TestClient(app) as c:

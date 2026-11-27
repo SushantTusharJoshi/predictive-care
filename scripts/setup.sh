@@ -23,7 +23,7 @@ echo "🐍 Step 2/5: Installing backend deps..."
 cd backend
 python3 -m venv venv
 source venv/bin/activate
-pip install -q -r requirements-pg.txt
+pip install -q -r requirements.txt
 echo "   ✅ Backend deps installed"
 
 echo ""
