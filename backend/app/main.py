@@ -35,13 +35,14 @@ from app.data.database_pg import (
     log_hitl_action,
     search_patients,
 )
-from app.middleware.hipaa import HipaaAuditMiddleware
+from app.middleware.hipaa import HipaaAuditMiddleware, audit_outcome, is_phi_path
 from app.services.auth import (
     authenticate,
     check_default_credentials,
     create_token,
     require_ops_token,
     require_role,
+    verify_token,
 )
 from app.services.create_patient import create_patient
 from app.services.narratives import longitudinal_narrative_result, risk_label, shap_narrative_result
@@ -176,6 +177,51 @@ def cors_origins(cfg=settings) -> list[str]:
 
 app.add_middleware(CORSMiddleware, allow_origins=cors_origins(), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
+
+
+def _caller(authorization: str | None) -> tuple[str, str]:
+    """Who made the request, from the bearer token if it verifies; never raises."""
+    scheme, _, token = (authorization or "").partition(" ")
+    payload = verify_token(token) if scheme == "Bearer" and token else None
+    if not payload:
+        return "anonymous", ""
+    return payload.get("sub", "unknown"), payload.get("role", "")
+
+
+async def _audit_refused(request: Request, status: int) -> None:
+    """Write one audit row for a refused or failed patient-data request.
+
+    Only the route template, method, status, outcome, IP and user agent are stored:
+    never the request body, query values or response content.
+    """
+    outcome = audit_outcome(status)
+    route = request.scope.get("route")
+    resource = getattr(route, "path", None) or request.url.path
+    patient_id = request.scope.get("path_params", {}).get("patient_id")
+    username, role = _caller(request.headers.get("authorization"))
+    try:
+        await log_audit(username, role, f"access_{outcome}", resource, patient_id=patient_id,
+                        details={"outcome": outcome, "status": status, "method": request.method},
+                        ip=request.client.host if request.client else "",
+                        user_agent=request.headers.get("user-agent", "")[:500])
+    except Exception:
+        logger.exception("Audit write failed for refused request %s %s", request.method, resource)
+
+
+@app.middleware("http")
+async def audit_refused_phi_access(request: Request, call_next):
+    """Every access to patient data is audited: routes log their own successes,
+    this logs the refused and failed ones (401, 403, 404, 422, 429, 5xx) exactly once."""
+    if not is_phi_path(request.url.path):
+        return await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        await _audit_refused(request, 500)
+        raise
+    if response.status_code >= 400:
+        await _audit_refused(request, response.status_code)
+    return response
 
 
 @app.exception_handler(Exception)
@@ -377,7 +423,7 @@ class PatientResponseRequest(BaseModel):
 @app.post("/patients/{patient_id}/respond")
 @limiter.limit(f"{settings.rate_limit_per_minute}/minute")
 async def patient_respond(request: Request, patient_id: str, body: PatientResponseRequest,
-    user=Depends(require_role(["admin", "physician", "nurse", "coordinator"]))):
+    user=Depends(require_role(["admin", "physician", "nurse", "coordinator"], permission="record_responses"))):
     """Record patient's response to a medication reminder.
     If trust < 0.6 and response is YES → flagged as Unverified (FR-3.2.4).
     """
@@ -537,7 +583,7 @@ class OverrideRequest(BaseModel):
 @app.post("/patients/{patient_id}/schedule-recommendation")
 @limiter.limit("30/minute")
 async def create_recommendation(request: Request, patient_id: str,
-    user=Depends(require_role(["admin", "physician", "coordinator"]))):
+    user=Depends(require_role(["admin", "physician", "coordinator"], permission="create_recommendations"))):
     features = await get_patient_features(patient_id)
     if not features or not MODELS: raise HTTPException(400, "Cannot generate without features/models")
     preds = _predict(features)
@@ -571,7 +617,7 @@ async def action_recommendation(request: Request, rec_id: str, body: ScheduleAct
 @app.post("/patients/{patient_id}/feedback")
 @limiter.limit("30/minute")
 async def clinician_feedback(request: Request, patient_id: str, body: FeedbackRequest,
-    user=Depends(require_role(["admin", "physician"]))):
+    user=Depends(require_role(["admin", "physician"], permission="override_predictions"))):
     await log_hitl_action(patient_id, user["username"], "feedback",
         prediction_type=body.prediction_type, feedback_rating=body.rating, reason=body.reason)
     await log_audit(user["username"], user["role"], "submit_feedback", patient_id, patient_id=patient_id)
@@ -604,6 +650,8 @@ async def stats(request: Request,
 @limiter.limit("30/minute")
 async def audit(request: Request, user=Depends(require_role(["admin"], permission="view_audit"))):
     events = await get_audit_log(limit=200)
+    await log_audit(user["username"], user["role"], "view_audit", "audit",
+                    details={"outcome": "allowed", "rows_returned": len(events)})
     return {"events": events}
 
 
@@ -618,7 +666,7 @@ async def hipaa_data_flow(user=Depends(require_role(["admin"]))):
         "version": "3.1.0",
         "data_flow": [
             {"step": 1, "name": "Authentication", "description": "JWT + RBAC. No MFA yet."},
-            {"step": 2, "name": "HIPAA Audit Middleware", "description": "Every PHI access logged with IP, user, timestamp, patient_id."},
+            {"step": 2, "name": "HIPAA Audit Middleware", "description": "Every PHI access logged with IP, user, timestamp, patient_id and outcome, including refused and failed attempts and reads of the audit log."},
             {"step": 3, "name": "Minimum Necessary Access", "description": "RBAC restricts endpoints by role."},
             {"step": 4, "name": "De-identification for LLM", "description": "Names, dates of birth, address, ZIP and identifiers stripped before any LLM call (Groq or Bedrock)."},
             {"step": 5, "name": "Narrative checks", "description": "Every LLM narrative must match the patient's SHAP output and pass local rules (no dosing, diagnosis or causal wording); Bedrock Guardrails when configured. Otherwise the template is shown."},

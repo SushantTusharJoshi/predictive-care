@@ -17,7 +17,7 @@ Live demo: [predictive-care.vercel.app](https://predictive-care.vercel.app)
 flowchart LR
   UI["Next.js frontend<br/>predictive-care.vercel.app"] -->|JWT| API["FastAPI app.main"]
   API --> AUTH["auth.py<br/>roles, demo accounts"]
-  API --> AUDIT["log_audit per route<br/>successful patient-data reads"]
+  API --> AUDIT["log_audit<br/>every patient-data access, allowed or refused"]
   API --> DB[("PostgreSQL<br/>synthetic patients")]
   API --> RISK["risk_model.py<br/>3 targets + per-patient SHAP"]
   RISK --> ART["artifacts.py<br/>sha256 checked before load"]
@@ -45,8 +45,8 @@ Drawn from the code in `backend/app`: every box is a module, and every arrow is 
 - SHAP explanations for every prediction, and LLM narratives that are shown only if they agree with that SHAP output.
 - A medication trust score and tiered reminders (15 minutes, 5 minutes, due, 10 minutes missed).
 - A clinician gate: the system recommends, a clinician approves on the Approvals page (demo accounts too, unless `DEMO_READ_ONLY=true`).
-- An audit-log row for every successful read through the patient, search, stats, prediction and schedule routes,
-  enforced by a test (refused or failed requests and reads of `/audit` itself are not logged).
+- Every access to patient data, allowed or refused, writes an audit_log row (patient, search, stats, prediction,
+  schedule and `/audit` routes), with an `outcome` field; enforced by tests.
 
 ---
 
@@ -166,13 +166,21 @@ and Guardrails calls are implemented but unverified.
 Design controls, not a compliance claim: a real deployment would also need a business associate agreement, a risk
 assessment and written policies.
 
-- Every successful read through a patient, search, stats, prediction or schedule route writes an audit-log row (user,
-  role, patient, time); [a test](backend/tests/test_audit_coverage.py) fails if one of those routes forgets. Not
-  logged: requests refused by the auth or role check (401/403), requests that fail before the read finishes (for
-  example a 404), the admin's own reads of `/audit`, and `/models/metrics` and `/hipaa/data-flow`, which return no
-  patient data.
+- Every access to patient data, allowed or refused, writes an audit_log row (user, role, patient, time, IP) on the
+  patient, search, stats, prediction, schedule and `/audit` routes, including the admin's own reads of `/audit`.
+  Routes log their successes; a middleware in `main.py` logs refused and failed attempts once each, with action
+  `access_<outcome>` and `details.outcome` set to `unauthenticated` (401), `denied` (403), `not_found` (404),
+  `invalid` (422), `rate_limited` (429), `rejected` (other 4xx) or `error` (5xx); successful `/audit` reads carry
+  `outcome: allowed`. Only the route template, method and status are stored, never request bodies or PHI values.
+  [Tests](backend/tests/test_audit_coverage.py) fail if a route forgets its success row or a refusal is not logged.
+  `/models/metrics` and `/hipaa/data-flow` return no patient data and are not logged.
 - De-identification before any LLM call, and a fixed list for the only free-text field that reaches a prompt.
 - RBAC with four roles (admin, physician, nurse, coordinator); demo accounts use synthetic data and act with their full role, and `DEMO_READ_ONLY=true` makes them view-only for actions.
+  Every write route needs an action permission as well as an allowed role: `record_responses` for
+  `/patients/{id}/respond` (admin, physician, nurse), `override_predictions` for `/feedback` and `/override` (admin,
+  physician), `create_recommendations` for `/schedule-recommendation` (admin, physician, coordinator: suggesting a
+  follow-up is separate from approving it), `approve_recommendations` for `/schedule/{id}/action`, `create_patients`
+  for `POST /patients`.
 - JWT on every patient endpoint; CORS with credentials only for `FRONTEND_URL`; generic error bodies.
 
 Model card: [docs/model-card.md](docs/model-card.md). Security findings and status: [SECURITY.md](SECURITY.md).
