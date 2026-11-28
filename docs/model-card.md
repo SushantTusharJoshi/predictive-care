@@ -15,6 +15,7 @@ Intended use: a portfolio demo of a time-honest training pipeline, calibration, 
 
 ## Data
 
+- Live demo model: version `20261128T015035Z-nogit`, trained on 10,000 synthetic patients copied from a local synthetic 100K cohort, sampled only from patients that have visits. History length is blended: 5,000 patients with 2 years of events, 3,000 with 5 years, 2,000 with 1 year. Visit types were rearranged by the planted-risk rule below (`rearrange_outcomes.py`). Source Postgres, `as_of` 2026-08-21, index date 2026-05-23.
 - Source: Postgres seeded with `python -m app.data.ingest_synthea --fallback` (synthetic patients, no real person). The fallback run ends with `app.data.rearrange_outcomes`, which plants the outcome signal described below; on an existing database it can be run on its own.
 - Index date = latest encounter in the database minus 90 days (`as_of` and `index_date` are in metrics.json). Every feature uses events strictly before the index date; labels use only the window after it.
 - 17 features: age, sex, BMI, smoker, SDOH risk count, insurance type (one-hot), diagnosis and active-medication counts, adherence rate over the last 90 days and a year earlier, adherence trend, response latency, average systolic BP and heart rate. Archetype labels and prior ER counts are excluded as leaky (the script asserts this).
@@ -42,7 +43,7 @@ which is not a model input. Each encounter row gets the key 1.5 x risk + Gumbel 
 encounter_id order); the rows with the highest keys take the acute types, as many as there were, and the most
 serious types go to the highest keys. This is a weighted draw without replacement with weight exp(1.5 x risk).
 Dates are not changed, so the index date and the time split are the same before and after. A second run changes
-nothing. On the 1,000-patient run the riskiest fifth of patients have 83% of their encounters acute, the lowest
+nothing. On the earlier 1,000-patient run the riskiest fifth of patients have 83% of their encounters acute, the lowest
 fifth 5%.
 
 The direction of every weight is clinically plausible; the sizes are chosen to make the signal recoverable at
@@ -52,47 +53,27 @@ signal, not that it would work on real patients.
 
 ## Training (one script: `python -m app.ml.train`)
 
-1. Order patients by patient time (first recorded encounter) and cut 70/10/20 into train, calibration and test. No patient is in two slices.
+1. Cohort split by enrolment date (the test set is the most recently enrolled patients over the same label window): patients sorted by enrolment date (first recorded encounter), cut 70/10/20 into train, calibration and test. No patient is in two slices.
 2. Fit four candidates on train: a logistic regression baseline (standardised, class-balanced), XGBoost, LightGBM, and the ensemble that averages the two tree models' log-odds.
 3. On the calibration slice only: pick the candidate with the best ROC-AUC, choose isotonic or sigmoid calibration by 5-fold CV Brier, and pick the decision threshold that maximises F1. Calibration is skipped, and says why, when the slice has fewer than 10 positives or 10 negatives.
 4. Report once on the untouched test slice: ROC-AUC, PR-AUC, Brier, precision, recall and F1 at the chosen threshold, reliability bins and ECE before and after calibration. Calibrated metrics are only claimed when test ECE did not get worse.
 5. Save `models-<version>.pkl`, its `.sha256`, `metrics.json` and a `current.json` manifest. The API refuses a file whose hash does not match.
 
-## Results on a 1,000-patient synthetic database
+## Results: live demo model (10,000 synthetic patients)
 
-Commands, run on 2026-11-27 against a throwaway Postgres: `python -m app.data.ingest_synthea --fallback --max-patients 1000` (17,615 encounters), `python -m app.ml.train` for the "before" run, then `python -m app.data.rearrange_outcomes` (8,787 encounter types changed; a second run changed 0) and `python -m app.ml.train` again. Full output: [metrics/postgres-1000-planted.json](metrics/postgres-1000-planted.json) (version `20261127T205414Z-e025414`) and [metrics/postgres-1000-before.json](metrics/postgres-1000-before.json). Tables printed by `python -m app.ml.report docs/metrics/postgres-1000-planted.json`.
+Version `20261128T015035Z-nogit`, read from `metrics-20261128T015035Z-nogit.json` on the Railway models volume. Source Postgres, `as_of` 2026-08-21, index date 2026-05-23; every feature uses events strictly before the index date. Serving and the drift check anchor features the same way as each other. The calibration slice chose the model, the calibration and the decision threshold (max F1); the test slice was read once. F1 is at that threshold, not at 0.5.
 
-Split: train 700 patients (first encounter 2021-11-28 to 2022-04-12), calibration 100 (2022-04-12 to 2022-06-02), test 200 (2022-06-03 to 2024-07-15). Index date 2026-08-29. Precision, recall and F1 are at the threshold chosen on the calibration slice (max F1), recorded in metrics.json as `targets.<target>.threshold`; `f1_at_0_5` is reported next to it.
-
-After rearranging:
-
-| Target | Selected | Test ROC-AUC | PR-AUC | Brier | Threshold | Precision | Recall | F1 | Baseline ROC-AUC | Positives train/cal/test |
-|---|---|---|---|---|---|---|---|---|---|---|
-| er_visit_30d | logreg, no calibration | 0.829 | 0.155 | 0.190 | 0.961 | 0.125 | 0.111 | 0.118 | 0.829 | 28/5/9 |
-| care_need_90d | XGBoost + sigmoid | 0.681 | 0.281 | 0.133 | 0.163 | 0.227 | 0.625 | 0.333 | 0.723 | 156/17/32 |
-| care_need_30d | XGBoost, no calibration | 0.640 | 0.151 | 0.106 | 0.247 | 0.140 | 0.375 | 0.203 | 0.671 | 62/8/16 |
-
-| Target | Calibration | ECE before | ECE after | Claimed |
-|---|---|---|---|---|
-| er_visit_30d | skipped: 5 positives in the calibration slice | 0.282 | 0.282 | no |
-| care_need_90d | sigmoid | 0.181 | 0.063 | yes |
-| care_need_30d | skipped: 8 positives in the calibration slice | 0.104 | 0.104 | no |
-
-Before rearranging (uniform encounter types):
-
-| Target | Selected | Test ROC-AUC | Threshold | F1 | F1 at 0.5 | Positives train/cal/test |
+| Target | Selected | Calibrated | Test ROC-AUC | F1 | Threshold | Brier |
 |---|---|---|---|---|---|---|
-| er_visit_30d | LightGBM | 0.417 | 0.051 | 0.071 | 0.154 | 38/4/9 |
-| care_need_90d | XGBoost + sigmoid | 0.555 | 0.170 | 0.252 | 0.000 | 178/17/32 |
-| care_need_30d | logreg | 0.408 | 0.496 | 0.088 | 0.092 | 70/8/15 |
+| er_visit_30d | LightGBM | yes | 0.657 | 0.212 | 0.061 | 0.082 |
+| care_need_90d | logistic regression | yes | 0.659 | 0.453 | 0.178 | 0.208 |
+| care_need_30d | LightGBM | yes | 0.624 | 0.261 | 0.067 | 0.112 |
 
-How to read this: before, the scores are at chance, as they should be with no feature-outcome link. After, every
-target beats chance, so the pipeline finds the planted signal. Model selection uses a calibration slice with 5 to
-17 positives, so it is noisy: on care_need_90d and care_need_30d the logistic baseline scored higher on test than
-the selected model. The test slice holds 9 to 32 positives per target, so every number has a wide margin of error.
-Over eight other draws of a 1,000-patient in-memory cohort with the same rule, care_need_90d test ROC-AUC ranged
-from 0.64 to 0.77. An earlier 600-patient run without the planted signal is kept in
-[metrics/postgres-demo-600.json](metrics/postgres-demo-600.json).
+How to read this: every target beats chance, so the pipeline recovers the planted signal on a larger and more mixed cohort than before. All three targets are calibrated, so the app shows a percent; an uncalibrated target would show a rank, not a percent.
+
+### History: 1,000-patient run
+
+The earlier 1,000-patient database (version `20261127T205414Z-e025414`, [metrics/postgres-1000-planted.json](metrics/postgres-1000-planted.json)) gave test ROC-AUC 0.829 / 0.681 / 0.640 for er_visit_30d / care_need_90d / care_need_30d, with only 9 to 32 test positives per target and calibration skipped for two targets. Before the outcome rearrangement the same database scored at chance (0.417 / 0.555 / 0.408, [metrics/postgres-1000-before.json](metrics/postgres-1000-before.json)). An earlier 600-patient run without the planted signal is kept in [metrics/postgres-demo-600.json](metrics/postgres-demo-600.json).
 
 ## Sanity check: the pipeline recovers a known signal
 
@@ -108,19 +89,16 @@ The logistic baseline wins here because the simulated outcome is itself logistic
 
 ## Fairness by adherence archetype (test slice)
 
-The 1,000-patient run after rearranging reports, per archetype, the observed and mean predicted rate, the share flagged at the chosen
-threshold, recall, false positive rate and ROC-AUC (`targets.<target>.fairness` in the json; shown on the admin
-page). A group needs 5 positives and 5 negatives before its rates are compared.
+Each run reports, per archetype, the observed and mean predicted rate, the share flagged at the chosen threshold, recall, false positive rate and ROC-AUC (`targets.<target>.fairness` in the json; shown on the admin page). A group needs 5 positives and 5 negatives before its rates are compared. On the 1,000-patient run only care_need_90d had enough cases per group, and its gaps were within noise.
 
-| Target | Groups with enough cases | What they show |
-|---|---|---|
-| care_need_90d | excellent (31 patients, 5 positives), good (56, 8), moderate (51, 7), poor (44, 11) | recall 0.40 / 0.38 / 0.71 / 0.82, false positive rate 0.19 / 0.21 / 0.48 / 0.70 |
-| er_visit_30d | none (9 positives in the whole test slice) | nothing to compare |
-| care_need_30d | poor only (5 positives) | nothing to compare |
+The planted rule makes poor adherence a risk factor, so the poor-adherence group is flagged more often by design. Archetype is not a model input (it is excluded as leaky) and the planted rule does not read it; it is only the grouping. Race and sex groups are not reported yet.
 
-The planted rule makes poor adherence a risk factor, so the poor-adherence group is flagged more often by design;
-with 5 to 11 positives per group the recall gaps are within noise. Archetype is not a model input (it is excluded
-as leaky) and the planted rule does not read it; it is only the grouping. Race and sex groups are not reported yet.
+## Lifecycle
+
+- Deploy: automatic after CI (lint, test, narrative-eval) passes on `main`.
+- Drift: nightly check, PSI on every feature and every target's score, against a baseline built from the same population the live check scores. Last run: status `ok`.
+- Retrain: weekly, and also when the drift check reports `drift`.
+- Clinician overrides: an evaluation feedback set only, never training labels, until there are at least 200.
 
 ## Explanations
 
@@ -132,7 +110,7 @@ as leaky) and the planted rule does not read it; it is only the grouping. Race a
 
 - Synthetic data only; no external or prospective validation; not clinically validated.
 - The feature-outcome link is planted by the documented rule above; recovering it checks the code, not clinical validity.
-- 1,000 patients is too small for stable metrics: 9 to 32 test positives per target.
-- Fairness is reported by archetype only, and the demo has too few cases per group to compare.
+- 10,000 synthetic patients with a planted signal; test ROC-AUC 0.62 to 0.66, and no external validation.
+- Fairness is reported by archetype only; race and sex are not reported.
 - Attribution is not causation: a feature with a large SHAP value is not a treatment target.
-- Probabilities from targets without calibration (marked "no" above) should not be read as calibrated risks.
+- Scores from a target without calibration should not be read as calibrated risks; the app shows them as a rank, not a percent.

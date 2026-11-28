@@ -65,6 +65,11 @@ Drawn from the code in `backend/app`: every box is a module, and every arrow is 
 - Index date = latest encounter minus 90 days. Features (17: demographics, insurance, diagnosis and medication
   counts, adherence now and a year earlier, response latency, vitals) use only events before it; labels use the
   30 or 90 days after it: `er_visit_30d`, `care_need_30d`, `care_need_90d`.
+- Live demo database: 10,000 synthetic patients copied from a local synthetic 100K cohort, sampled only from
+  patients that have visits, with a blended history length: 5,000 with 2 years of events, 3,000 with 5 years and
+  2,000 with 1 year. Visit types were then rearranged by the planted-risk rule above (`rearrange_outcomes.py`).
+  The live model was trained on it with `as_of` 2026-08-21 and index date 2026-05-23; serving and the drift check
+  anchor features the same way as each other.
 
 ### Splits, models, calibration
 
@@ -88,41 +93,41 @@ python -m app.ml.report data/models/metrics.json      # print the tables below
 Read these as a check that the pipeline recovers a known, planted signal. They say nothing about clinical
 validity: the patients are synthetic and the link between features and outcomes was put there by the rule above.
 
-Run on 2026-11-27 against a throwaway Postgres seeded with `ingest_synthea --fallback --max-patients 1000`
-(1,000 synthetic patients, 17,615 encounters), trained with `python -m app.ml.train`. Test slice: the newest 200
-patients. Precision, recall and F1 are at the decision threshold chosen on the calibration slice (the one that
-maximises F1 there), not at 0.5; metrics.json records it under `targets.<target>.threshold` and also reports
-`f1_at_0_5`.
+Live demo model, version `20261128T015035Z-nogit`, from the metrics file on the Railway models volume
+(`metrics-20261128T015035Z-nogit.json`), trained on the 10,000-patient database above. Source Postgres, `as_of`
+2026-08-21, index date 2026-05-23, features strictly before the index date. The calibration slice chose the model,
+the calibration and the threshold; the test slice was read once. F1 is at that chosen threshold, not at 0.5.
 
-After `rearrange_outcomes`, from [docs/metrics/postgres-1000-planted.json](docs/metrics/postgres-1000-planted.json)
-(version `20261127T205414Z-e025414`):
+| Target | Selected | Calibrated | Test ROC-AUC | F1 | Threshold | Brier |
+|---|---|---|---|---|---|---|
+| er_visit_30d | LightGBM | yes | 0.657 | 0.212 | 0.061 | 0.082 |
+| care_need_90d | logistic regression | yes | 0.659 | 0.453 | 0.178 | 0.208 |
+| care_need_30d | LightGBM | yes | 0.624 | 0.261 | 0.067 | 0.112 |
 
-| Target | Selected | ROC-AUC | PR-AUC | Brier | Threshold | Precision | Recall | F1 | Calibrated | Test positives |
-|---|---|---|---|---|---|---|---|---|---|---|
-| er_visit_30d | logreg | 0.829 | 0.155 | 0.190 | 0.961 | 0.125 | 0.111 | 0.118 | no (5 positives in calibration slice) | 9 |
-| care_need_90d | XGBoost | 0.681 | 0.281 | 0.133 | 0.163 | 0.227 | 0.625 | 0.333 | yes, sigmoid (ECE 0.181 to 0.063) | 32 |
-| care_need_30d | XGBoost | 0.640 | 0.151 | 0.106 | 0.247 | 0.140 | 0.375 | 0.203 | no (8 positives in calibration slice) | 16 |
+All three targets are calibrated, so the app shows their scores as a percent; an uncalibrated target would show a
+rank, not a percent.
 
-Before, same database with the generator's uniform encounter types, from
-[docs/metrics/postgres-1000-before.json](docs/metrics/postgres-1000-before.json): test ROC-AUC 0.417 / 0.555 /
-0.408 and F1 0.071 / 0.252 / 0.088 (thresholds 0.051 / 0.170 / 0.496) for er_visit_30d / care_need_90d /
-care_need_30d. At a fixed 0.5 threshold care_need_90d had F1 = 0.
-
-Test ROC-AUC per candidate after rearranging (logreg / XGBoost / LightGBM / ensemble): er_visit_30d 0.829 / 0.771 /
-0.750 / 0.764, care_need_90d 0.723 / 0.681 / 0.692 / 0.689, care_need_30d 0.671 / 0.640 / 0.628 / 0.631. The
-choice is made on a 100-patient calibration slice with 5 to 17 positives, so it is noisy; the test slice has 9 to
-32 positives, so every number has a wide margin of error. Over eight other draws of a 1,000-patient in-memory cohort
-with the same rule, care_need_90d test ROC-AUC ranged from 0.64 to 0.77.
+History: the earlier 1,000-patient run (version `20261127T205414Z-e025414`,
+[docs/metrics/postgres-1000-planted.json](docs/metrics/postgres-1000-planted.json)) reached test ROC-AUC 0.829 /
+0.681 / 0.640 on a 200-patient test slice with 9 to 32 positives, too few for stable numbers; before the outcome
+rearrangement the same database scored at chance
+([docs/metrics/postgres-1000-before.json](docs/metrics/postgres-1000-before.json)).
 
 Sanity check without the database, from [docs/metrics/memory-sanity-20k.json](docs/metrics/memory-sanity-20k.json)
 (`python -m app.ml.train --source memory --n 20000`, outcomes drawn from a logistic function of the features):
 test ROC-AUC 0.689 / 0.691 / 0.695 for the three targets, with sigmoid calibration lowering ECE to 0.014 / 0.021 /
 0.017.
 
-Fairness: the same run reports error rates per adherence archetype on the test slice (admin page, Bias Audit tab).
-For care_need_90d four groups have enough cases (5+ positives and negatives); with 5 to 11 positives each, their
-gaps are within noise. The planted rule makes poor adherence a risk factor, so that group is flagged more often by
-design.
+Fairness: each run reports error rates per adherence archetype on the test slice (admin page, Bias Audit tab). The
+planted rule makes poor adherence a risk factor, so that group is flagged more often by design.
+
+### Model lifecycle
+
+- Deploy: automatic after CI (lint, test, narrative-eval) passes on `main` (see [Deploy](#deploy)).
+- Drift: nightly check, PSI on every feature and every target's score, against a baseline built from the same
+  population the live check scores. Last run: status `ok`.
+- Retrain: weekly, and also when the drift check reports `drift`.
+- Clinician overrides: an evaluation feedback set only, never training labels, until there are at least 200.
 
 Details, limits and the reliability numbers: [model card](docs/model-card.md).
 
@@ -203,8 +208,9 @@ python -c "from passlib.context import CryptContext; print(CryptContext(schemes=
 ## Monitoring
 
 `GET /ops/drift` compares today's population with the training baseline. Training writes the baseline into
-`metrics.json` (`drift_baseline`): decile bin edges and shares for every model feature (train slice) and for each
-target's predicted score (held-out test slice). The endpoint rebuilds the features with the training SQL as of today
+`metrics.json` (`drift_baseline`): decile bin edges and shares for every model feature and for each target's
+predicted score, both taken from the same population the live check scores, built the same way. The endpoint
+rebuilds the features with the training SQL, anchored on the day after the data's latest encounter like serving
 (newest `DRIFT_MAX_PATIENTS`, default 20,000), scores them with the loaded models, and returns:
 
 - `features` and `scores`: PSI per item, `PSI = sum((live - base) * ln(live / base))` over the same bins, each with a
@@ -296,14 +302,14 @@ Each function below has a `# What it does` / `# Catch it` / `# Card` header and 
 | Limit | Impact |
 |---|---|
 | Synthetic data; the feature-outcome link is planted by a documented rule | Metrics show the pipeline recovers a known signal; nothing here says how the model would do on real patients |
-| Small demo cohort | Calibration is skipped for two of three targets; test metrics have wide error bars |
+| Demo cohort of 10,000 synthetic patients | Test ROC-AUC 0.62 to 0.66 on a planted signal; no external validation |
 | Fairness reported by archetype only, on too few cases | No group comparison can be trusted yet; race and sex not reported |
 | Narrative cache, daily caps and rate limits are in-process | Each worker counts separately; restarts reset them |
 | Live Bedrock and Guardrails calls unverified; the app's Groq client is stub-tested | Groq prompts were run live only through the CI eval |
 | JWT in `localStorage`, no MFA or SSO | See [SECURITY.md](SECURITY.md) |
 | Ingest uses ORM inserts | Large cohorts (100K patients) take hours to load |
 | Retraining runs inside the API process | Requests slow down while it trains; one worker only, or two runs could overlap |
-| Drift is measured as of today | A synthetic database whose events stopped in the past drifts on the 90-day features, and retraining on the same data will not clear it |
+| Drift is anchored on the data's latest encounter | On an unchanged synthetic database the check compares a population with itself, so here it mostly tests the plumbing |
 
 ## About the coder
 
