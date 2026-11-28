@@ -7,7 +7,6 @@ from starlette.testclient import TestClient
 
 import app.data.database_pg as _db_mod
 
-
 ALL_DEMO_ACCOUNTS = "admin,physician,dr.patel,nurse,rn.williams,coordinator"
 
 
