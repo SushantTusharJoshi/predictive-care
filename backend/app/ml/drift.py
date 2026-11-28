@@ -95,14 +95,23 @@ def drift_report(baseline: dict, live_features: pd.DataFrame, live_scores: dict[
 
 
 def load_live(engine=None, limit: int | None = None) -> pd.DataFrame:
-    """The live population with the training feature definitions, as of today.
+    """The live population with the training feature definitions, as serving sees it.
 
-    load_postgres puts the index date at as_of - 90 days, so as_of = today + 90 days
-    means features from everything before today (the serving view). Its label columns
-    look into the future and are ignored here.
+    Serving anchors features on the day after the data's latest encounter (database_pg),
+    not on today, so a database whose events stopped in the past does not read as
+    all-zero adherence. load_postgres puts the index date at as_of - 90 days, so
+    as_of = anchor + 90 days gives features from everything before the anchor. Its
+    label columns look into the future and are ignored here.
     """
+    from sqlalchemy import text
+
+    from app.data.database_pg import _DATA_AS_OF_SQL, get_sync_engine
     from app.ml.train import FEATURE_COLS, load_postgres
 
-    df, _ = load_postgres(engine, as_of=date.today() + timedelta(days=90), limit=limit)
+    engine = engine or get_sync_engine()
+    with engine.connect() as conn:
+        latest = conn.execute(text(_DATA_AS_OF_SQL)).scalar()
+    anchor = (latest + timedelta(days=1)) if latest else date.today()
+    df, _ = load_postgres(engine, as_of=anchor + timedelta(days=90), limit=limit)
     df[FEATURE_COLS] = df[FEATURE_COLS].astype(float).fillna(0)
     return df
