@@ -13,7 +13,9 @@ PENDING = [{"recommendation_id": "r1", "patient_id": "p1", "patient_name": "A B"
 
 
 class TestApprovalQueue:
-    def test_demo_coordinator_sees_queue_but_cannot_approve(self, client):
+    def test_demo_coordinator_sees_queue_but_cannot_approve(self, client, monkeypatch):
+        import app.services.auth as auth
+        monkeypatch.setattr(auth.settings, "demo_read_only", True)
         token = client.post("/auth/login", json={"username": "coordinator", "password": "coordinator"}).json()["token"]
         with patch("app.main.list_pending_recommendations", new=AsyncMock(return_value=PENDING)), \
                 patch("app.main.log_audit", new=AsyncMock()) as audit:

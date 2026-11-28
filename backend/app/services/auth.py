@@ -96,20 +96,26 @@ ROLE_PERMISSIONS = {
                     "approve_recommendations", "view_adherence", "view_reminders"],
 }
 
-# PC-F16: demo accounts see synthetic data but cannot take actions that a real
-# clinician or admin would own. Real AUTH_USERS keep their full role permissions.
+# PC-F16: with DEMO_READ_ONLY=true, demo accounts see synthetic data but cannot take actions
+# that a real clinician or admin would own. Off by default: demo accounts act with their full role.
+# Real AUTH_USERS keep their full role permissions either way.
 DEMO_DENIED = {"approve_recommendations", "override_predictions", "create_patients",
                "view_audit", "manage_users"}
 
 USERS = build_users()
 
 
+def _restricted(flag) -> bool:
+    """A demo account is restricted only while DEMO_READ_ONLY is on."""
+    return bool(flag) and settings.demo_read_only
+
+
 def is_demo_user(username: str, claim: bool | None = None) -> bool:
-    """Demo if the token says so or the live user table marks the name as a demo account.
+    """Restricted demo if read-only is on and the token or the live user table marks the name as demo.
 
     Checking the table too covers tokens issued before the claim existed.
     """
-    return bool(claim) or bool(USERS.get(username, {}).get("demo", False))
+    return _restricted(bool(claim) or USERS.get(username, {}).get("demo", False))
 
 
 def effective_permissions(role: str, demo: bool) -> list[str]:
@@ -123,7 +129,7 @@ def authenticate(username: str, password: str) -> dict | None:
     if not user or not pwd_ctx.verify(password, user["password"]):
         return None
     return {"username": username, "role": user["role"], "name": user["name"],
-            "demo": bool(user.get("demo", False))}
+            "demo": _restricted(user.get("demo", False))}
 
 
 def create_token(user: dict) -> str:
@@ -132,7 +138,7 @@ def create_token(user: dict) -> str:
         "sub": user["username"],
         "role": user["role"],
         "name": user["name"],
-        "demo": bool(user.get("demo", False)),
+        "demo": _restricted(user.get("demo", False)),
         "exp": datetime.now(UTC) + timedelta(hours=JWT_EXPIRE_HOURS),
         "iat": datetime.now(UTC),
     }

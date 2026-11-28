@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     # Demo accounts (password = username). Unset means on everywhere except production.
     demo_logins: bool | None = None
+    # Demo accounts act with their full role on the synthetic demo; true makes them view-only for actions.
+    demo_read_only: bool = False
     # JSON object: {"username": {"password_hash": "<bcrypt>", "role": "admin", "name": "..."}}
     auth_users: str = ""
     log_level: str = "info"

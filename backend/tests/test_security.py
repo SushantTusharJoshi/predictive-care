@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from starlette.testclient import TestClient
 
 import app.services.auth as auth
@@ -19,6 +20,12 @@ def _login(client, username):
 # ---------- PC-F16: demo accounts ----------
 
 class TestDemoAccounts:
+    """DEMO_READ_ONLY=true: demo accounts are view-only for actions."""
+
+    @pytest.fixture(autouse=True)
+    def _read_only(self, monkeypatch):
+        monkeypatch.setattr(auth.settings, "demo_read_only", True)
+
     def test_login_reports_demo_flag(self, client):
         assert _login(client, "admin")["demo"] is True
 
@@ -59,6 +66,27 @@ class TestDemoAccounts:
         perms = auth.effective_permissions("admin", demo=True)
         assert "view_patients" in perms
         assert not set(perms) & auth.DEMO_DENIED
+
+
+class TestDemoFullRoleByDefault:
+    """DEMO_READ_ONLY off (the default): demo accounts act with their full role."""
+
+    @pytest.fixture(autouse=True)
+    def _full_role(self, monkeypatch):
+        monkeypatch.setattr(auth.settings, "demo_read_only", False)
+
+    def test_demo_admin_can_approve(self, client):
+        login = _login(client, "admin")
+        assert login["demo"] is False
+        assert auth.verify_token(login["token"])["demo"] is False
+        assert not auth.is_demo_user("admin", None)
+        assert "approve_recommendations" in auth.effective_permissions("admin", login["demo"])
+        with patch("app.main.action_scheduling_recommendation",
+                   new=AsyncMock(return_value={"status": "approved"})), \
+                patch("app.main.log_audit", new=AsyncMock()):
+            resp = client.post("/schedule/00000000-0000-0000-0000-000000000001/action",
+                               headers=auth_header(login["token"]), json={"action": "approved"})
+        assert resp.status_code == 200
 
 
 class TestRealAccountsKeepPermissions:
