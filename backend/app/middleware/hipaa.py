@@ -11,8 +11,24 @@ from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
 
-# Paths that access PHI and must be audit-logged
-PHI_PATHS = ["/patients", "/search"]
+# Paths that access PHI and must be audit-logged on every outcome (allowed, refused or failed).
+# Kept in step with PHI_MARKERS in tests/test_audit_coverage.py.
+PHI_PATHS = ("/patients", "/search", "/stats", "/predict", "/schedule", "/audit")
+
+_OUTCOMES = {401: "unauthenticated", 403: "denied", 404: "not_found", 422: "invalid", 429: "rate_limited"}
+
+
+def is_phi_path(path: str) -> bool:
+    return path.startswith(PHI_PATHS)
+
+
+def audit_outcome(status: int) -> str:
+    """The outcome field written to audit_log for a response status."""
+    if status < 400:
+        return "allowed"
+    if status >= 500:
+        return "error"
+    return _OUTCOMES.get(status, "rejected")
 
 
 class HipaaAuditMiddleware(BaseHTTPMiddleware):
@@ -29,7 +45,7 @@ class HipaaAuditMiddleware(BaseHTTPMiddleware):
         response: Response = await call_next(request)
 
         # Log PHI access
-        is_phi = any(path.startswith(p) for p in PHI_PATHS)
+        is_phi = is_phi_path(path)
         duration_ms = round((time.time() - start) * 1000, 1)
 
         if is_phi:

@@ -86,21 +86,25 @@ ROLE_PERMISSIONS = {
     "admin": ["view_patients", "view_predictions", "view_admin", "view_alerts",
               "manage_users", "view_ml_metrics", "view_audit", "approve_recommendations",
               "view_shap", "view_adherence", "view_reminders", "view_scheduling", "view_hitl",
-              "override_predictions", "create_patients"],
+              "override_predictions", "create_patients", "record_responses",
+              "create_recommendations"],
     "physician": ["view_patients", "view_predictions", "view_alerts",
                   "approve_recommendations", "view_shap", "view_adherence",
                   "view_reminders", "view_scheduling", "view_hitl",
-                  "override_predictions", "create_patients"],
-    "nurse": ["view_patients", "view_alerts", "view_adherence", "view_reminders"],
+                  "override_predictions", "create_patients", "record_responses",
+                  "create_recommendations"],
+    "nurse": ["view_patients", "view_alerts", "view_adherence", "view_reminders",
+              "record_responses"],
     "coordinator": ["view_patients", "view_alerts", "view_scheduling",
-                    "approve_recommendations", "view_adherence", "view_reminders"],
+                    "approve_recommendations", "view_adherence", "view_reminders",
+                    "create_recommendations"],
 }
 
 # PC-F16: with DEMO_READ_ONLY=true, demo accounts see synthetic data but cannot take actions
 # that a real clinician or admin would own. Off by default: demo accounts act with their full role.
 # Real AUTH_USERS keep their full role permissions either way.
 DEMO_DENIED = {"approve_recommendations", "override_predictions", "create_patients",
-               "view_audit", "manage_users"}
+               "view_audit", "manage_users", "record_responses", "create_recommendations"}
 
 USERS = build_users()
 
@@ -190,6 +194,8 @@ def require_role(allowed_roles: list[str], permission: str | None = None):
         if user["role"] not in allowed_roles:
             raise HTTPException(403, "Your role is not authorized for this action")
         # DECISION: for actions, does this account (demo or real) hold the permission?
+        if permission and permission not in ROLE_PERMISSIONS.get(user["role"], []):
+            raise HTTPException(403, "Your role is not authorized for this action")
         if permission and permission not in effective_permissions(user["role"], user["demo"]):
             raise HTTPException(403, "Demo accounts are view-only for this action")
         # RETURN: the user, for audit logging in the route
