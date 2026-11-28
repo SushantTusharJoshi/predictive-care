@@ -5,7 +5,7 @@ checked plain-English note, and keeps a clinician in charge of every scheduling 
 
 Live demo: [predictive-care.vercel.app](https://predictive-care.vercel.app)
 
-> Synthetic data only. Not clinically validated and not for clinical use. Demo logins use synthetic data and act with their full role; `DEMO_READ_ONLY=true` makes them view-only.
+> Synthetic data only. Not clinically validated and not for clinical use. Demo logins use synthetic data. The demo admin acts with its full role; the other demo accounts (physician, nurse, coordinator) can view but not approve, override or create (`DEMO_FULL_ROLE`, default `admin`; `DEMO_READ_ONLY=true` makes every demo account view-only).
 
 **Stack:** FastAPI, PostgreSQL 16, scikit-learn, XGBoost, LightGBM, SHAP, Groq or Amazon Bedrock, Next.js 15
 
@@ -44,7 +44,7 @@ Drawn from the code in `backend/app`: every box is a module, and every arrow is 
 - Versioned model files that the API refuses to load if their sha256 does not match.
 - SHAP explanations for every prediction, and LLM narratives that are shown only if they agree with that SHAP output.
 - A medication trust score and tiered reminders (15 minutes, 5 minutes, due, 10 minutes missed).
-- A clinician gate: the system recommends, a clinician approves on the Approvals page (demo accounts too, unless `DEMO_READ_ONLY=true`).
+- A clinician gate: the system recommends, a clinician approves on the Approvals page (the demo admin can approve; other demo accounts see the queue view-only).
 - Every access to patient data, allowed or refused, writes an audit_log row (patient, search, stats, prediction,
   schedule and `/audit` routes), with an `outcome` field; enforced by tests.
 
@@ -175,7 +175,7 @@ assessment and written policies.
   [Tests](backend/tests/test_audit_coverage.py) fail if a route forgets its success row or a refusal is not logged.
   `/models/metrics` and `/hipaa/data-flow` return no patient data and are not logged.
 - De-identification before any LLM call, and a fixed list for the only free-text field that reaches a prompt.
-- RBAC with four roles (admin, physician, nurse, coordinator); demo accounts use synthetic data and act with their full role, and `DEMO_READ_ONLY=true` makes them view-only for actions.
+- RBAC with four roles (admin, physician, nurse, coordinator); demo accounts use synthetic data; only the demo admin keeps its full role (`DEMO_FULL_ROLE`, default `admin`), the others are view-only for actions, and `DEMO_READ_ONLY=true` restricts the demo admin too.
   Every write route needs an action permission as well as an allowed role: `record_responses` for
   `/patients/{id}/respond` (admin, physician, nurse), `override_predictions` for `/feedback` and `/override` (admin,
   physician), `create_recommendations` for `/schedule-recommendation` (admin, physician, coordinator: suggesting a
@@ -204,9 +204,9 @@ python -m pytest -q                                    # from backend/
 ```
 
 Demo logins (username = password) are on outside production: `admin`, `physician`, `dr.patel`, `nurse`,
-`rn.williams`, `coordinator`. In production they are off unless `DEMO_LOGINS=true`. They use synthetic data and
-act with their full role; with `DEMO_READ_ONLY=true` they can view but not approve, override, create patients or read
-the audit log. Real accounts go in `AUTH_USERS` as bcrypt hashes:
+`rn.williams`, `coordinator`. In production they are off unless `DEMO_LOGINS=true`. They use synthetic data. The demo
+admin acts with its full role; the other demo accounts can view but not approve, override, create patients or read
+the audit log (`DEMO_FULL_ROLE`, default `admin`; `DEMO_READ_ONLY=true` restricts the demo admin too). Real accounts go in `AUTH_USERS` as bcrypt hashes:
 
 ```bash
 python -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('your-password'))"

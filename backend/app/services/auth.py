@@ -109,9 +109,20 @@ DEMO_DENIED = {"approve_recommendations", "override_predictions", "create_patien
 USERS = build_users()
 
 
-def _restricted(flag) -> bool:
-    """A demo account is restricted only while DEMO_READ_ONLY is on."""
-    return bool(flag) and settings.demo_read_only
+def _full_role_demo_accounts() -> set[str]:
+    return {u.strip() for u in (getattr(settings, "demo_full_role", "admin") or "").split(",") if u.strip()}
+
+
+def _restricted(flag, username: str | None = None) -> bool:
+    """A demo account is view-only for actions unless it is listed in DEMO_FULL_ROLE (default: admin).
+
+    DEMO_READ_ONLY=true makes every demo account view-only, admin included.
+    """
+    if not flag:
+        return False
+    if settings.demo_read_only:
+        return True
+    return username not in _full_role_demo_accounts()
 
 
 def is_demo_user(username: str, claim: bool | None = None) -> bool:
@@ -119,7 +130,7 @@ def is_demo_user(username: str, claim: bool | None = None) -> bool:
 
     Checking the table too covers tokens issued before the claim existed.
     """
-    return _restricted(bool(claim) or USERS.get(username, {}).get("demo", False))
+    return _restricted(bool(claim) or USERS.get(username, {}).get("demo", False), username)
 
 
 def effective_permissions(role: str, demo: bool) -> list[str]:
@@ -133,7 +144,7 @@ def authenticate(username: str, password: str) -> dict | None:
     if not user or not pwd_ctx.verify(password, user["password"]):
         return None
     return {"username": username, "role": user["role"], "name": user["name"],
-            "demo": _restricted(user.get("demo", False))}
+            "demo": _restricted(user.get("demo", False), username)}
 
 
 def create_token(user: dict) -> str:
@@ -142,7 +153,7 @@ def create_token(user: dict) -> str:
         "sub": user["username"],
         "role": user["role"],
         "name": user["name"],
-        "demo": _restricted(user.get("demo", False)),
+        "demo": _restricted(user.get("demo", False), user["username"]),
         "exp": datetime.now(UTC) + timedelta(hours=JWT_EXPIRE_HOURS),
         "iat": datetime.now(UTC),
     }
