@@ -171,3 +171,39 @@ class TestCors:
     def test_other_vercel_site_gets_no_cors_header(self, client):
         resp = client.get("/health", headers={"Origin": "https://evil-site.vercel.app"})
         assert "access-control-allow-origin" not in {k.lower() for k in resp.headers}
+
+
+class TestDemoAdminOnlyByDefault:
+    """Production default: only the demo admin acts; other demo accounts are view-only for actions."""
+
+    @pytest.fixture(autouse=True)
+    def _production_default(self, monkeypatch):
+        monkeypatch.setattr(auth.settings, "demo_full_role", "admin")
+        monkeypatch.setattr(auth.settings, "demo_read_only", False)
+
+    def test_demo_admin_is_not_restricted(self, client):
+        login = _login(client, "admin")
+        assert login["demo"] is False
+        assert "approve_recommendations" in auth.effective_permissions("admin", login["demo"])
+
+    @pytest.mark.parametrize("username", ["physician", "dr.patel", "nurse", "rn.williams", "coordinator"])
+    def test_other_demo_accounts_are_view_only(self, client, username):
+        login = _login(client, username)
+        assert login["demo"] is True
+        assert not set(auth.effective_permissions(login["role"], True)) & auth.DEMO_DENIED
+
+    def test_demo_physician_cannot_approve(self, client):
+        login = _login(client, "physician")
+        resp = client.post("/schedule/00000000-0000-0000-0000-000000000001/action",
+                           headers=auth_header(login["token"]), json={"action": "approved"})
+        assert resp.status_code == 403
+
+    def test_demo_physician_cannot_create_patients(self, client):
+        login = _login(client, "dr.patel")
+        resp = client.post("/patients", headers=auth_header(login["token"]),
+                           json={"first_name": "A", "last_name": "B"})
+        assert resp.status_code == 403
+
+    def test_demo_read_only_still_restricts_admin(self, client, monkeypatch):
+        monkeypatch.setattr(auth.settings, "demo_read_only", True)
+        assert _login(client, "admin")["demo"] is True

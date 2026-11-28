@@ -7,6 +7,18 @@ from starlette.testclient import TestClient
 
 import app.data.database_pg as _db_mod
 
+ALL_DEMO_ACCOUNTS = "admin,physician,dr.patel,nurse,rn.williams,coordinator"
+
+
+@pytest.fixture(autouse=True)
+def _demo_accounts_act_as_their_role(monkeypatch):
+    """Most tests use the demo logins as stand-ins for each role, so they act with their full role here.
+
+    Tests of the demo restriction itself set DEMO_FULL_ROLE back to its production default ("admin").
+    """
+    import app.services.auth as auth
+    monkeypatch.setattr(auth.settings, "demo_full_role", ALL_DEMO_ACCOUNTS)
+
 
 @pytest.fixture()
 def client():

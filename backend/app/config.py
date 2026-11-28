@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     demo_logins: bool | None = None
     # Demo accounts act with their full role on the synthetic demo; true makes them view-only for actions.
     demo_read_only: bool = False
+    # Demo accounts that keep their full role (comma-separated). Every other demo account is view-only for actions.
+    demo_full_role: str = "admin"
     # JSON object: {"username": {"password_hash": "<bcrypt>", "role": "admin", "name": "..."}}
     auth_users: str = ""
     log_level: str = "info"
