@@ -467,11 +467,13 @@ def _git_sha() -> str:
 
 def run(df: pd.DataFrame, data_info: dict, model_dir: Path | None = None, version: str | None = None,
         label: str = "demo", knn: dict | None = None, overrides: pd.DataFrame | None = None,
-        override_features: pd.DataFrame | None = None) -> dict:
+        override_features: pd.DataFrame | None = None, reference: pd.DataFrame | None = None) -> dict:
     """Train every target, and (when model_dir is given) write the versioned artifact.
 
     metrics.json also gets the drift baseline (decile histograms for /ops/drift) and the
     new model's agreement with clinician overrides (PC-F6: feedback, never labels).
+    `reference` is the population /ops/drift will compare against (drift.load_live for
+    Postgres); without one, the whole training population (all three slices) is used.
     """
     df = df.copy()
     df[FEATURE_COLS] = df[FEATURE_COLS].astype(float).fillna(0)
@@ -494,8 +496,15 @@ def run(df: pd.DataFrame, data_info: dict, model_dir: Path | None = None, versio
             logger.info("%s: %s roc_auc=%s pr_auc=%s brier=%s f1=%s@%s calibration=%s", target, info["selected"],
                         t["roc_auc"], t["pr_auc"], t["brier"], t["f1"], t["threshold"],
                         info["calibration"].get("method") or info["calibration"]["status"])
-    test_scores = {t: e["model"].predict_proba(test[FEATURE_COLS])[:, 1] for t, e in models.items()} if len(test) else {}
-    metrics["drift_baseline"] = drift.build_baseline(train[FEATURE_COLS], test_scores)
+    # DECISION: features and scores from one frame, scored like the live check, so a retrain
+    # followed by /ops/drift on unchanged data compares the population with itself
+    if reference is None or reference.empty:
+        ref, ref_name = df, "whole training population (all slices)"
+    else:
+        ref, ref_name = reference.copy(), "live population at training time (drift.load_live)"
+        ref[FEATURE_COLS] = ref[FEATURE_COLS].astype(float).fillna(0)
+    ref_scores = drift.score_population({t: e["model"] for t, e in models.items()}, ref[FEATURE_COLS])
+    metrics["drift_baseline"] = drift.build_baseline(ref[FEATURE_COLS], ref_scores, reference=ref_name)
     if overrides is None:
         overrides = pd.DataFrame(columns=feedback.COLUMNS)
     features = df if override_features is None else override_features
@@ -524,7 +533,7 @@ def main(argv=None):
         from app.config import get_settings
         args.model_dir = get_settings().model_dir
 
-    overrides = override_features = None
+    overrides = override_features = reference = None
     if args.source == "memory":
         df, info = load_memory(args.n)
         knn = None
@@ -534,6 +543,12 @@ def main(argv=None):
         if not args.no_knn:
             from app.ml.similar_patients import build_knn_payload_from_pg
             knn = build_knn_payload_from_pg()
+        try:  # the drift reference: the same population /ops/drift loads, with the same limit
+            from app.config import get_settings
+            reference = drift.load_live(limit=get_settings().drift_max_patients)
+        except Exception as e:
+            logger.warning("Live drift reference skipped, using the training population (%s)", type(e).__name__)
+            reference = None
         try:  # PC-F6: overrides are scored against the new model, never added to the labels
             overrides = feedback.load_overrides()
             override_features = drift.load_live() if len(overrides) else None
@@ -542,7 +557,7 @@ def main(argv=None):
             overrides = None
     logger.info("Loaded %d patients from %s", len(df), info["source"])
     metrics = run(df, info, Path(args.model_dir), label=args.label, knn=knn, overrides=overrides,
-                  override_features=override_features)
+                  override_features=override_features, reference=reference)
     logger.info("Saved %s (sha256 %s)", metrics["artifact"]["file"], metrics["artifact"]["sha256"][:12])
     if args.upload:
         artifacts.upload(Path(args.model_dir), artifacts.read_manifest(Path(args.model_dir)))

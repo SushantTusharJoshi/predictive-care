@@ -176,6 +176,70 @@ class TestDriftEndpoint:
         body = r.json()
         assert body["status"] == "drift" and body["features"]["adherence_rate_90d"]["status"] == "drift"
 
+    @staticmethod
+    def _all_psi(body):
+        return {**{f: v["psi"] for f, v in body["features"].items()},
+                **{f"score:{t}": v["psi"] for t, v in body["scores"].items()}}
+
+    def test_retrain_then_drift_on_unchanged_data_is_ok(self, client, served):
+        m, df = served
+        r, _ = self._get(client, m, df, pd.DataFrame(columns=feedback.COLUMNS))
+        body = r.json()
+        assert set(body["scores"]) == set(tr.TARGETS)
+        assert all(v["psi"] < 0.1 for v in body["scores"].values()), body["scores"]
+        assert body["status"] == "ok", self._all_psi(body)
+
+
+class TestDriftBaselinePopulation:
+    """Issue #34: a Postgres retrain followed by /ops/drift on unchanged data reported score drift,
+    because the baseline took scores from the newest 20% of patients at the training anchor while
+    the live check scores everyone with features anchored on the data's latest date."""
+
+    @staticmethod
+    def _frames():
+        train_df, info = tr.load_memory(n=1500, seed=11)
+        # the training frame is anchored 90 days before the data's latest date; the live frame
+        # (load_live) re-anchors on the latest date, so the same patients carry newer features
+        live = train_df.copy()
+        rng = np.random.default_rng(5)
+        live["adherence_rate_90d"] = (live["adherence_rate_90d"] - 12 + rng.normal(0, 4, len(live))).clip(0, 100)
+        live["adherence_trend"] = live["adherence_rate_90d"] - live["adherence_rate_1y_ago"]
+        live["n_diagnoses"] = live["n_diagnoses"] + (rng.random(len(live)) < 0.3)
+        return train_df, {**info, "source": "postgres"}, live
+
+    def test_postgres_retrain_then_drift_reports_no_drift(self, client, tmp_path):
+        import app.main as m
+
+        train_df, info, live = self._frames()
+        with (patch.object(tr, "load_postgres", return_value=(train_df, info)),
+              patch.object(drift, "load_live", return_value=live) as load_live,
+              patch.object(feedback, "load_overrides", return_value=pd.DataFrame(columns=feedback.COLUMNS))):
+            metrics = tr.main(["--source", "postgres", "--model-dir", str(tmp_path), "--no-knn"])
+        assert load_live.call_args.kwargs["limit"] == m.settings.drift_max_patients
+        base = metrics["drift_baseline"]
+        assert base["reference"]["n"] == len(live) and "load_live" in base["reference"]["scores"]
+
+        m.apply_bundle(*artifacts.load_bundle(tmp_path))
+        try:
+            with (patch.object(m.settings, "ops_token", TOKEN), patch.object(drift, "load_live", return_value=live),
+                  patch.object(feedback, "load_overrides", return_value=pd.DataFrame(columns=feedback.COLUMNS)),
+                  patch.object(m, "log_audit", new_callable=AsyncMock)):
+                body = client.get("/ops/drift", headers=auth_header(TOKEN)).json()
+            models = {t: e["model"] for t, e in m.MODELS.items() if e.get("model")}
+        finally:
+            m.MODELS.clear()
+            m.DRIFT_BASELINE.clear()
+        assert set(body["scores"]) == set(tr.TARGETS)
+        assert all(v["psi"] < 0.1 for v in body["scores"].values()), body["scores"]
+        assert all(v["psi"] < 0.1 for v in body["features"].values()), body["features"]
+        assert body["status"] == "ok"
+
+        # the old reference (train-slice features, test-slice scores) flags this same data
+        train, _, test = tr.time_split(train_df.assign(**{c: train_df[c].astype(float) for c in tr.FEATURE_COLS}))
+        old = drift.build_baseline(train[tr.FEATURE_COLS], drift.score_population(models, test[tr.FEATURE_COLS]))
+        report = drift.drift_report(old, live[tr.FEATURE_COLS], drift.score_population(models, live[tr.FEATURE_COLS]))
+        assert max(s["psi"] for s in report["scores"].values()) >= 0.1, report["scores"]
+
 
 # ━━━ Retrain: one at a time, and only a verified artifact is swapped in ━━━
 

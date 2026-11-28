@@ -1,10 +1,15 @@
 """Production drift: PSI of the live population against the training baseline.
 
 At training time `build_baseline` stores, in metrics.json, decile bin edges and bin
-shares for every model feature (from the train slice) and for each target's
-predicted score (from the held-out test slice, because in-sample tree scores are
-sharper than anything seen at serving). `drift_report` bins the live population
-with the same edges and computes the population stability index per item:
+shares for every model feature and for each target's predicted score. Both come from
+one reference frame: the population /ops/drift will score, built the way it builds
+it. For a Postgres retrain that is `load_live` itself (every patient, features
+anchored on the day after the data's latest encounter), and the scores are the new
+model's predict_proba on that frame, exactly as the live check computes them. So a
+retrain followed by /ops/drift on unchanged data compares a population with itself.
+Taking scores from one time slice (say the newest patients) or features at another
+anchor would read as drift on day one. `drift_report` bins the live population with
+the same edges and computes the population stability index per item:
 
     PSI = sum over bins of (live share - baseline share) * ln(live share / baseline share)
 
@@ -63,14 +68,21 @@ def _histogram(values) -> dict:
     return {"edges": edges, "shares": bin_shares(values, edges), "n": int(np.isfinite(np.asarray(values, float)).sum())}
 
 
-def build_baseline(train_features: pd.DataFrame, test_scores: dict[str, np.ndarray]) -> dict:
-    """Histograms written into metrics.json at training time."""
+def score_population(models: dict, X: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Each target's predicted score for every row, the way /ops/drift scores the live frame."""
+    return {t: m.predict_proba(X)[:, 1] for t, m in models.items()} if len(X) else {}
+
+
+def build_baseline(features: pd.DataFrame, scores: dict[str, np.ndarray],
+                   reference: str = "whole training population") -> dict:
+    """Histograms written into metrics.json at training time. `features` and `scores`
+    must describe the same rows: the population the live check will compare against."""
     return {
         "bins": BINS,
-        "reference": {"features": "train slice", "scores": "test slice (held out)"},
+        "reference": {"features": reference, "scores": reference, "n": len(features)},
         "thresholds": {"watch": WATCH, "drift": DRIFT},
-        "features": {c: _histogram(train_features[c]) for c in train_features.columns},
-        "scores": {t: _histogram(s) for t, s in test_scores.items()},
+        "features": {c: _histogram(features[c]) for c in features.columns},
+        "scores": {t: _histogram(s) for t, s in scores.items()},
     }
 
 
