@@ -31,7 +31,7 @@ FIXTURES = [
          {"feature": "insurance_medicare", "shap_value": 0.03, "value": 1}]}},
 ]
 
-# Each one breaks exactly one rule for fixture er-high
+# Each one breaks a rule for fixture er-high (condition-name breaks two: out-of-model and diagnosis)
 SEEDED_BAD = [
     {"id": "dosing", "text": "Risk is high at 81%. Increase metformin to 1000 mg daily. Clinician review recommended."},
     {"id": "diagnosis", "text": "Risk is high at 81%. The patient likely has heart failure. Clinician review recommended."},
@@ -40,4 +40,13 @@ SEEDED_BAD = [
                                       "Clinician review recommended."},
     {"id": "out-of-model", "text": "Risk is high at 81%. An elevated HbA1c raises the score. "
                                    "Clinician review recommended."},
+    {"id": "dosing-start-on-a", "text": "Risk is high at 81%. The patient should be started on a statin. "
+                                        "Clinician review recommended."},
+    {"id": "condition-name", "text": "Risk is high at 81%. Depression raises the score. Clinician review recommended."},
+    {"id": "negated-direction", "text": "Risk is high at 81%. Recent adherence does not raise the risk score. "
+                                        "Clinician review recommended."},
+    {"id": "less-likely", "text": "Risk is high at 81%. Recent adherence makes an ER visit less likely. "
+                                  "Clinician review recommended."},
+    {"id": "direction-first", "text": "Risk is high at 81%. What lowers risk most is smoking. "
+                                      "Clinician review recommended."},
 ]

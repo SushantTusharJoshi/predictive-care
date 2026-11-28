@@ -49,10 +49,13 @@ examples:
   abs_tol: 1000000000.0
   validators:
   - type: regex
-    pattern: (?i)(?:\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|units?|iu)\b|\bdos(?:e|es|ing|age)\b|\btitrat\w*|\bprescrib\w*|\bdiscontinu\w*|\bstop taking\b|\bmilligrams?\b|\b(?:start|begin|initiate)\w* (?:on |a |an )?(?:insulin|metformin|statin|anticoagula\w*|beta[- ]blocker)|\badjust\w* (?:the |his |her |their )?(?:medication|regimen))
+    pattern: (?i)(?:\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|units?|iu)\b|\bdos(?:e|es|ing|age)\b|\btitrat\w*|\bprescrib\w*|\bdiscontinu\w*|\bstop taking\b|\bmilligrams?\b|\b(?:start|begin|initiate)\w* (?:on )?(?:a |an )?(?:insulin|metformin|statin|anticoagula\w*|beta[- ]blocker)|\badjust\w* (?:the |his |her |their )?(?:medication|regimen))
     invert: true
   - type: regex
     pattern: (?i)(?:\bdiagnos(?:e|ed|es with|ing|is)\b|\b(?:likely|probably|may|might) (?:has|have)\b|\bsuffer\w* from\b|\bconsistent with\b|\bindicative of\b|\bsigns? of\b|\bsuggests? (?:a |an )?(?:diagnosis|condition|disease)\b)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bdepress(?:ion|ive)\b|\bheart (?:failure|disease)\b|\bchf\b|\bkidney disease\b|\bckd\b|\brenal (?:disease|failure)\b|\bdiabet\w*|\bhypertensi\w*|\bcopd\b|\basthma\w*|\bcancer\w*|\bstroke\b|\bdementia\b|\banxiety\b|\bcoronary\b|\batrial fibrillation\b|\bpneumonia\b|\bsepsis\b|\ban(?:a)?emi\w*|\bobes(?:e|ity)\b|\bdisorder\b)
     invert: true
   - type: regex
     pattern: (?i)(?:\bcaus(?:e|es|ed|ing)\b|\bbecause of\b|\bdue to\b|\bleads? to\b|\bled to\b|\bresults? in\b|\bresulting in\b|\bresponsible for\b|\bas a result of\b|\bis why\b|\bowing to\b)
@@ -94,22 +97,40 @@ examples:
   abs_tol: 1000000000.0
   validators:
   - type: regex
-    pattern: (?i)(?:\bhba1c\b|\ba1c\b|cholesterol|\bldl\b|\bhdl\b|\bglucose\b|creatinine|\begfr\b|kidney function|\boxygen\b|\bspo2\b|temperature|\bweight\b|\bdiet\b|\bexercise\b|\balcohol\b|\bfamily history\b|\bgenetic\w*)
+    pattern: (?i)(?:\bhba1c\b|\ba1c\b|cholesterol|\bldl\b|\bhdl\b|\bglucose\b|creatinine|\begfr\b|kidney function|\boxygen\b|\bspo2\b|temperature|\bweight\b|\bdiet\b|\bexercise\b|\balcohol\b|\bfamily history\b|\bgenetic\w*|\bh(?:a)?emoglobin\b|\bhgb\b)
     invert: true
   - type: regex
-    pattern: (?i)(?:adherence[ _]rate[ _]90d|(?:recent|90[- ]day|current) adherence)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?i)(?:\bdepress(?:ion|ive)\b|\bheart (?:failure|disease)\b|\bchf\b|\bkidney disease\b|\bckd\b|\brenal (?:disease|failure)\b|\bdiabet\w*|\bhypertensi\w*|\bcopd\b|\basthma\w*|\bcancer\w*|\bstroke\b|\bdementia\b|\banxiety\b|\bcoronary\b|\batrial fibrillation\b|\bpneumonia\b|\bsepsis\b|\ban(?:a)?emi\w*|\bobes(?:e|ity)\b|\bdisorder\b)
     invert: true
   - type: regex
-    pattern: (?i)(?:\bbmi\b|body[- ]mass)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?i)(?:adherence[ _]rate[ _]90d|(?:recent|90[- ]day|current) adherence)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
     invert: true
   - type: regex
-    pattern: (?i)(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to)
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:adherence[ _]rate[ _]90d|(?:recent|90[- ]day|current) adherence)
     invert: true
   - type: regex
-    pattern: (?i)(?:\bsmok\w*|\btobacco\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?i)(?:\bbmi\b|body[- ]mass)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
     invert: true
   - type: regex
-    pattern: (?i)(?:heart rate|\bpulse\b|avg[ _]hr)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to)
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bbmi\b|body[- ]mass)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:lower\w*|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offset\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bsmok\w*|\btobacco\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bsmok\w*|\btobacco\b)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:heart rate|\bpulse\b|avg[ _]hr)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:lower\w*|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offset\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:heart rate|\bpulse\b|avg[ _]hr)
     invert: true
 - id: er-high-quality
   input: 'Prediction: er visit 30d
@@ -190,10 +211,13 @@ examples:
   abs_tol: 1000000000.0
   validators:
   - type: regex
-    pattern: (?i)(?:\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|units?|iu)\b|\bdos(?:e|es|ing|age)\b|\btitrat\w*|\bprescrib\w*|\bdiscontinu\w*|\bstop taking\b|\bmilligrams?\b|\b(?:start|begin|initiate)\w* (?:on |a |an )?(?:insulin|metformin|statin|anticoagula\w*|beta[- ]blocker)|\badjust\w* (?:the |his |her |their )?(?:medication|regimen))
+    pattern: (?i)(?:\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|units?|iu)\b|\bdos(?:e|es|ing|age)\b|\btitrat\w*|\bprescrib\w*|\bdiscontinu\w*|\bstop taking\b|\bmilligrams?\b|\b(?:start|begin|initiate)\w* (?:on )?(?:a |an )?(?:insulin|metformin|statin|anticoagula\w*|beta[- ]blocker)|\badjust\w* (?:the |his |her |their )?(?:medication|regimen))
     invert: true
   - type: regex
     pattern: (?i)(?:\bdiagnos(?:e|ed|es with|ing|is)\b|\b(?:likely|probably|may|might) (?:has|have)\b|\bsuffer\w* from\b|\bconsistent with\b|\bindicative of\b|\bsigns? of\b|\bsuggests? (?:a |an )?(?:diagnosis|condition|disease)\b)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bdepress(?:ion|ive)\b|\bheart (?:failure|disease)\b|\bchf\b|\bkidney disease\b|\bckd\b|\brenal (?:disease|failure)\b|\bdiabet\w*|\bhypertensi\w*|\bcopd\b|\basthma\w*|\bcancer\w*|\bstroke\b|\bdementia\b|\banxiety\b|\bcoronary\b|\batrial fibrillation\b|\bpneumonia\b|\bsepsis\b|\ban(?:a)?emi\w*|\bobes(?:e|ity)\b|\bdisorder\b)
     invert: true
   - type: regex
     pattern: (?i)(?:\bcaus(?:e|es|ed|ing)\b|\bbecause of\b|\bdue to\b|\bleads? to\b|\bled to\b|\bresults? in\b|\bresulting in\b|\bresponsible for\b|\bas a result of\b|\bis why\b|\bowing to\b)
@@ -235,22 +259,40 @@ examples:
   abs_tol: 1000000000.0
   validators:
   - type: regex
-    pattern: (?i)(?:\bhba1c\b|\ba1c\b|cholesterol|\bldl\b|\bhdl\b|\bglucose\b|creatinine|\begfr\b|kidney function|\boxygen\b|\bspo2\b|temperature|\bweight\b|\bdiet\b|\bexercise\b|\balcohol\b|\bfamily history\b|\bgenetic\w*)
+    pattern: (?i)(?:\bhba1c\b|\ba1c\b|cholesterol|\bldl\b|\bhdl\b|\bglucose\b|creatinine|\begfr\b|kidney function|\boxygen\b|\bspo2\b|temperature|\bweight\b|\bdiet\b|\bexercise\b|\balcohol\b|\bfamily history\b|\bgenetic\w*|\bh(?:a)?emoglobin\b|\bhgb\b)
     invert: true
   - type: regex
-    pattern: (?i)(?:adherence[ _]rate[ _]90d|(?:recent|90[- ]day|current) adherence)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to)
+    pattern: (?i)(?:\bdepress(?:ion|ive)\b|\bheart (?:failure|disease)\b|\bchf\b|\bkidney disease\b|\bckd\b|\brenal (?:disease|failure)\b|\bdiabet\w*|\bhypertensi\w*|\bcopd\b|\basthma\w*|\bcancer\w*|\bstroke\b|\bdementia\b|\banxiety\b|\bcoronary\b|\batrial fibrillation\b|\bpneumonia\b|\bsepsis\b|\ban(?:a)?emi\w*|\bobes(?:e|ity)\b|\bdisorder\b)
     invert: true
   - type: regex
-    pattern: (?i)(?:\bdiagnoses\b|\bcomorbidit\w*|(?:number of|active|chronic) conditions|n[ _]diagnoses)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to)
+    pattern: (?i)(?:adherence[ _]rate[ _]90d|(?:recent|90[- ]day|current) adherence)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:lower\w*|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offset\w*))
     invert: true
   - type: regex
-    pattern: (?i)(?:\blatency\b|response time|time to (?:respond|take)|avg[ _]response[ _]latency)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:adherence[ _]rate[ _]90d|(?:recent|90[- ]day|current) adherence)
     invert: true
   - type: regex
-    pattern: (?i)(?:\bbmi\b|body[- ]mass)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to)
+    pattern: (?i)(?:\bdiagnoses\b|\bcomorbidit\w*|(?:number of|active|chronic) conditions|n[ _]diagnoses)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:lower\w*|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offset\w*))
     invert: true
   - type: regex
-    pattern: (?i)(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bdiagnoses\b|\bcomorbidit\w*|(?:number of|active|chronic) conditions|n[ _]diagnoses)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\blatency\b|response time|time to (?:respond|take)|avg[ _]response[ _]latency)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\blatency\b|response time|time to (?:respond|take)|avg[ _]response[ _]latency)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bbmi\b|body[- ]mass)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:lower\w*|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offset\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bbmi\b|body[- ]mass)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)
     invert: true
 - id: care90-low-quality
   input: 'Prediction: care need 90d
@@ -331,10 +373,13 @@ examples:
   abs_tol: 1000000000.0
   validators:
   - type: regex
-    pattern: (?i)(?:\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|units?|iu)\b|\bdos(?:e|es|ing|age)\b|\btitrat\w*|\bprescrib\w*|\bdiscontinu\w*|\bstop taking\b|\bmilligrams?\b|\b(?:start|begin|initiate)\w* (?:on |a |an )?(?:insulin|metformin|statin|anticoagula\w*|beta[- ]blocker)|\badjust\w* (?:the |his |her |their )?(?:medication|regimen))
+    pattern: (?i)(?:\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|units?|iu)\b|\bdos(?:e|es|ing|age)\b|\btitrat\w*|\bprescrib\w*|\bdiscontinu\w*|\bstop taking\b|\bmilligrams?\b|\b(?:start|begin|initiate)\w* (?:on )?(?:a |an )?(?:insulin|metformin|statin|anticoagula\w*|beta[- ]blocker)|\badjust\w* (?:the |his |her |their )?(?:medication|regimen))
     invert: true
   - type: regex
     pattern: (?i)(?:\bdiagnos(?:e|ed|es with|ing|is)\b|\b(?:likely|probably|may|might) (?:has|have)\b|\bsuffer\w* from\b|\bconsistent with\b|\bindicative of\b|\bsigns? of\b|\bsuggests? (?:a |an )?(?:diagnosis|condition|disease)\b)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bdepress(?:ion|ive)\b|\bheart (?:failure|disease)\b|\bchf\b|\bkidney disease\b|\bckd\b|\brenal (?:disease|failure)\b|\bdiabet\w*|\bhypertensi\w*|\bcopd\b|\basthma\w*|\bcancer\w*|\bstroke\b|\bdementia\b|\banxiety\b|\bcoronary\b|\batrial fibrillation\b|\bpneumonia\b|\bsepsis\b|\ban(?:a)?emi\w*|\bobes(?:e|ity)\b|\bdisorder\b)
     invert: true
   - type: regex
     pattern: (?i)(?:\bcaus(?:e|es|ed|ing)\b|\bbecause of\b|\bdue to\b|\bleads? to\b|\bled to\b|\bresults? in\b|\bresulting in\b|\bresponsible for\b|\bas a result of\b|\bis why\b|\bowing to\b)
@@ -376,22 +421,40 @@ examples:
   abs_tol: 1000000000.0
   validators:
   - type: regex
-    pattern: (?i)(?:\bhba1c\b|\ba1c\b|cholesterol|\bldl\b|\bhdl\b|\bglucose\b|creatinine|\begfr\b|kidney function|\boxygen\b|\bspo2\b|temperature|\bweight\b|\bdiet\b|\bexercise\b|\balcohol\b|\bfamily history\b|\bgenetic\w*)
+    pattern: (?i)(?:\bhba1c\b|\ba1c\b|cholesterol|\bldl\b|\bhdl\b|\bglucose\b|creatinine|\begfr\b|kidney function|\boxygen\b|\bspo2\b|temperature|\bweight\b|\bdiet\b|\bexercise\b|\balcohol\b|\bfamily history\b|\bgenetic\w*|\bh(?:a)?emoglobin\b|\bhgb\b)
     invert: true
   - type: regex
-    pattern: (?i)(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?i)(?:\bdepress(?:ion|ive)\b|\bheart (?:failure|disease)\b|\bchf\b|\bkidney disease\b|\bckd\b|\brenal (?:disease|failure)\b|\bdiabet\w*|\bhypertensi\w*|\bcopd\b|\basthma\w*|\bcancer\w*|\bstroke\b|\bdementia\b|\banxiety\b|\bcoronary\b|\batrial fibrillation\b|\bpneumonia\b|\bsepsis\b|\ban(?:a)?emi\w*|\bobes(?:e|ity)\b|\bdisorder\b)
     invert: true
   - type: regex
-    pattern: (?i)(?:\bdiagnoses\b|\bcomorbidit\w*|(?:number of|active|chronic) conditions|n[ _]diagnoses)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?i)(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
     invert: true
   - type: regex
-    pattern: (?i)(?:adherence[ _]trend|(?:declin|improv|drop|fall)\w* (?:in )?adherence|adherence (?:has )?(?:declin|improv|drop|fall)\w*)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bage\b|\bages?d\b|years? old|\bolder\b|\byounger\b)
     invert: true
   - type: regex
-    pattern: (?i)(?:\bsystolic\b|blood pressure|\bsbp\b|avg[ _]sbp)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to)
+    pattern: (?i)(?:\bdiagnoses\b|\bcomorbidit\w*|(?:number of|active|chronic) conditions|n[ _]diagnoses)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
     invert: true
   - type: regex
-    pattern: (?i)(?:\bmedicare\b|insurance[ _]medicare)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bdiagnoses\b|\bcomorbidit\w*|(?:number of|active|chronic) conditions|n[ _]diagnoses)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:adherence[ _]trend|(?:declin|improv|drop|fall)\w* (?:in )?adherence|adherence (?:has )?(?:declin|improv|drop|fall)\w*)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:adherence[ _]trend|(?:declin|improv|drop|fall)\w* (?:in )?adherence|adherence (?:has )?(?:declin|improv|drop|fall)\w*)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bsystolic\b|blood pressure|\bsbp\b|avg[ _]sbp)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:lower\w*|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offset\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|more likely|(?:higher|greater) (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bsystolic\b|blood pressure|\bsbp\b|avg[ _]sbp)
+    invert: true
+  - type: regex
+    pattern: (?i)(?:\bmedicare\b|insurance[ _]medicare)(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))|(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*))
+    invert: true
+  - type: regex
+    pattern: (?im)(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|lower (?:risk|score|odds|chance))(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}(?:\bmedicare\b|insurance[ _]medicare)
     invert: true
 - id: care30-moderate-quality
   input: 'Prediction: care need 30d

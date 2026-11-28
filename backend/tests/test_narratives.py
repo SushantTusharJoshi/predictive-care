@@ -76,6 +76,56 @@ class TestShapCheck:
         assert not r.ok
         assert any(why in reason for reason in r.reasons), r.reasons
 
+    @pytest.mark.parametrize("bad, why", [
+        # negation next to the cue flips it
+        ("Recent adherence does not raise the risk score.", "lowers risk; SHAP says it raises"),
+        ("Recent adherence doesn't raise the score.", "lowers risk; SHAP says it raises"),
+        ("Smoking is not a risk factor here.", "lowers risk; SHAP says it raises"),
+        # direction words that used to be missed
+        ("Age means higher risk.", "raises risk; SHAP says it lowers"),
+        ("Age makes an ER visit more likely.", "raises risk; SHAP says it lowers"),
+        ("Smoking makes an ER visit less likely.", "lowers risk; SHAP says it raises"),
+        ("Age boosts the score.", "raises risk; SHAP says it lowers"),
+        ("Recent adherence decreases risk.", "lowers risk; SHAP says it raises"),
+        ("Age greatly increases the score.", "raises risk; SHAP says it lowers"),
+        # direction word before the feature
+        ("What lowers risk most is smoking.", "lowers risk; SHAP says it raises"),
+        ("What lowers risk most is smoking.", "largest factor"),
+        ("Risk drivers include age.", "raises risk; SHAP says it lowers"),
+        # comparisons against the SHAP rank
+        ("Smoking raises risk more than recent adherence.", "larger effect than 'adherence_rate_90d'"),
+        ("Smoking has a bigger effect than BMI.", "larger effect than 'bmi'"),
+        ("Recent adherence raises risk less than smoking.", "larger effect than 'adherence_rate_90d'"),
+        # conditions the model does not use
+        ("Depression raises the score.", "does not use"),
+        ("Heart failure raises the score.", "does not use"),
+        ("Kidney disease raises the score.", "does not use"),
+        ("Low hemoglobin raises the score.", "does not use"),
+    ])
+    def test_reviewer_bad_narratives_fail(self, bad, why):
+        r = check_shap(bad, TOP)
+        assert not r.ok
+        assert any(why in reason for reason in r.reasons), r.reasons
+
+    def test_negation_when_shap_lowers(self):
+        top = [{**f, "shap_value": -f["shap_value"]} if f["feature"] == "bmi" else f for f in TOP]
+        r = check_shap("BMI does not lower the risk.", top)
+        assert not r.ok and any("'bmi' raises risk; SHAP says it lowers" in x for x in r.reasons), r.reasons
+
+    @pytest.mark.parametrize("good", [
+        "Age does not raise the score.",
+        "BMI does not lower the risk.",
+        "Recent adherence raises risk more than smoking.",
+        "BMI raises risk less than recent adherence.",
+        "Recent adherence makes an ER visit more likely, and BMI means greater risk.",
+        "What raises risk most is recent adherence.",
+        "Risk drivers include recent adherence and BMI. Protective factors include age.",
+        "Low recent adherence raises the score the most, and having a higher BMI also raises it.",
+    ])
+    def test_faithful_variants_pass(self, good):
+        r = check_shap(good, TOP)
+        assert r.ok, r.reasons
+
     def test_only_top_five_count(self):
         extra = TOP + [{"feature": "avg_sbp", "shap_value": 0.01, "value": 120}]
         assert not check_shap("Systolic blood pressure raises risk.", extra).ok
@@ -92,6 +142,13 @@ class TestRules:
         ("Poor adherence causes the ER visits.", "causal"),
         ("Risk is high due to BMI.", "causal"),
         ("Low adherence leads to admissions.", "causal"),
+        ("The patient should be started on a statin.", "dosing"),
+        ("Start on insulin today.", "dosing"),
+        ("Begin an anticoagulant.", "dosing"),
+        ("Depression raises the score.", "diagnosis"),
+        ("Heart failure raises the score.", "diagnosis"),
+        ("Kidney disease raises the score.", "diagnosis"),
+        ("A history of diabetes raises the score.", "diagnosis"),
     ])
     def test_rule_violations(self, bad, label):
         reasons = check_rules(bad)
@@ -102,6 +159,9 @@ class TestRules:
 
     def test_feature_word_diagnoses_is_not_a_diagnosis(self):
         assert check_rules("A higher number of diagnoses raises the score.") == []
+
+    def test_condition_without_shap_still_fails(self):
+        assert not check_narrative("Kidney disease is worsening.", None).ok
 
 
 # ━━━ PC-F10 / PC-N16: provider chain with fault injection ━━━
