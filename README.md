@@ -5,7 +5,7 @@ checked plain-English note, and keeps a clinician in charge of every scheduling 
 
 Live demo: [predictive-care.vercel.app](https://predictive-care.vercel.app)
 
-> Synthetic data only. Not clinically validated and not for clinical use. Demo logins are view-only for actions.
+> Synthetic data only. Not clinically validated and not for clinical use. Demo logins use synthetic data and act with their full role; `DEMO_READ_ONLY=true` makes them view-only.
 
 **Stack:** FastAPI, PostgreSQL 16, scikit-learn, XGBoost, LightGBM, SHAP, Groq or Amazon Bedrock, Next.js 15
 
@@ -16,7 +16,7 @@ Live demo: [predictive-care.vercel.app](https://predictive-care.vercel.app)
 ```mermaid
 flowchart LR
   UI["Next.js frontend<br/>predictive-care.vercel.app"] -->|JWT| API["FastAPI app.main"]
-  API --> AUTH["auth.py<br/>roles, view-only demo accounts"]
+  API --> AUTH["auth.py<br/>roles, demo accounts"]
   API --> AUDIT["middleware<br/>audit_log on every PHI read"]
   API --> DB[("PostgreSQL<br/>synthetic patients")]
   API --> RISK["risk_model.py<br/>3 targets + per-patient SHAP"]
@@ -44,7 +44,7 @@ Drawn from the code in `backend/app`: every box is a module, and every arrow is 
 - Versioned model files that the API refuses to load if their sha256 does not match.
 - SHAP explanations for every prediction, and LLM narratives that are shown only if they agree with that SHAP output.
 - A medication trust score and tiered reminders (15 minutes, 5 minutes, due, 10 minutes missed).
-- A clinician gate: the system recommends, a clinician approves on the Approvals page; demo accounts can only view.
+- A clinician gate: the system recommends, a clinician approves on the Approvals page (demo accounts too, unless `DEMO_READ_ONLY=true`).
 - An audit-log row for every read of patient data, enforced by a test.
 
 ---
@@ -161,7 +161,7 @@ assessment and written policies.
 
 - Every read of patient data writes an audit-log row (user, role, patient, time); [a test](backend/tests/test_audit_coverage.py) fails if a route forgets.
 - De-identification before any LLM call, and a fixed list for the only free-text field that reaches a prompt.
-- RBAC with four roles (admin, physician, nurse, coordinator); demo accounts are view-only for actions.
+- RBAC with four roles (admin, physician, nurse, coordinator); demo accounts use synthetic data and act with their full role, and `DEMO_READ_ONLY=true` makes them view-only for actions.
 - JWT on every patient endpoint; CORS with credentials only for `FRONTEND_URL`; generic error bodies.
 
 Model card: [docs/model-card.md](docs/model-card.md). Security findings and status: [SECURITY.md](SECURITY.md).
@@ -185,8 +185,9 @@ python -m pytest -q                                    # from backend/
 ```
 
 Demo logins (username = password) are on outside production: `admin`, `physician`, `dr.patel`, `nurse`,
-`rn.williams`, `coordinator`. In production they are off unless `DEMO_LOGINS=true`, and they can view but not
-approve, override, create patients or read the audit log. Real accounts go in `AUTH_USERS` as bcrypt hashes:
+`rn.williams`, `coordinator`. In production they are off unless `DEMO_LOGINS=true`. They use synthetic data and
+act with their full role; with `DEMO_READ_ONLY=true` they can view but not approve, override, create patients or read
+the audit log. Real accounts go in `AUTH_USERS` as bcrypt hashes:
 
 ```bash
 python -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('your-password'))"
