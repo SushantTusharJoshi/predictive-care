@@ -7,8 +7,10 @@ Each case's input is the exact prompt the API sends (shap_prompt) and the suite'
 system prompt is the API's SYSTEM, so a live run tests the real request. The kit's
 validators are regexes, so they approximate the Python checks:
   - security (critical): the PC-F4 rule patterns must be absent
-  - logic (critical): no out-of-model term, and no top feature described in the
-    opposite direction to its SHAP sign (PC-F3)
+  - logic (critical): no out-of-model term or condition name, and no top feature
+    described in the opposite direction to its SHAP sign, including a negated right
+    direction ("does not raise") and a wrong direction word leading the sentence
+    ("What lowers risk most is smoking") (PC-F3)
   - quality (tolerance): states the probability, ends with clinician review, short
 The full Python check (evals/check_report.py) runs on live reports.
 
@@ -22,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from app.services.narrative_checks import CAUSAL, DIAGNOSIS, DOSING, FEATURE_TERMS, OUT_OF_MODEL
+from app.services.narrative_checks import CAUSAL, CONDITIONS, DIAGNOSIS, DOSING, FEATURE_TERMS, OUT_OF_MODEL
 from app.services.narratives import SYSTEM, shap_prompt
 from evals.fixtures import FIXTURES, SEEDED_BAD
 
@@ -30,8 +32,16 @@ HERE = Path(__file__).resolve().parent
 SUITE = HERE / "narratives.yaml"
 SEEDED = HERE / "narratives_seeded_bad.yaml"
 
-UP_VERBS = r"(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to)"
-DOWN_VERBS = r"(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets)"
+UP_VERBS = (r"(?:raises|raised|raising|increas\w*|elevat\w*|drives|adds to|contribut\w* to|boost\w*|"
+            r"more likely|(?:higher|greater) (?:risk|score|odds|chance))")
+DOWN_VERBS = (r"(?:lowers|lowered|lowering|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offsets|less likely|"
+              r"lower (?:risk|score|odds|chance))")
+# base forms for "does not raise" / "doesn't lower": a negated right direction is a wrong one
+UP_BASE = r"(?:rais\w*|increas\w*|elevat\w*|driv\w*|add\w* to|contribut\w*|boost\w*)"
+DOWN_BASE = r"(?:lower\w*|reduc\w*|decreas\w*|protect\w*|mitigat\w*|offset\w*)"
+NEGATED = r"(?:\bnot|n't|\bnever)\s+(?:[\w']+\s+){0,2}"
+# a sentence that opens with the direction word: "What lowers risk most is smoking"
+LEAD = r"(?:^|[.;!?]\s+)[^.;,\n]{0,40}?\b"
 # stay inside one clause: stop at . ; , newline or a conjunction, but allow decimals like 34.0
 SAME_CLAUSE = r"(?:(?!\b(?:while|whereas|but|and)\b)(?:[^.;,\n]|\.\d)){0,80}"
 NEUTRAL = {"comparator": "numeric", "expected": "0", "abs_tol": 1000000000.0}
@@ -42,12 +52,16 @@ def _any(patterns: list[str]) -> str:
 
 
 def contradiction_patterns(top_features: list[dict]) -> list[str]:
-    """One regex per top feature; each matches if that feature is said to move risk the wrong way."""
+    """Two regexes per top feature; each matches if that feature is said to move risk the wrong way.
+    The first covers "feature ... wrong verb" and "feature ... not right verb", the second a
+    sentence that opens with the wrong verb and then names the feature."""
     out = []
     for f in top_features:
         terms = "(?:" + "|".join(FEATURE_TERMS[f["feature"]]) + ")"
-        wrong = DOWN_VERBS if f["shap_value"] > 0 else UP_VERBS
-        out.append("(?i)" + terms + SAME_CLAUSE + r"\b" + wrong)
+        up = f["shap_value"] > 0
+        wrong, right = (DOWN_VERBS, UP_BASE) if up else (UP_VERBS, DOWN_BASE)
+        out.append("(?i)" + terms + SAME_CLAUSE + r"(?:\b" + wrong + "|" + NEGATED + right + ")")
+        out.append("(?im)" + LEAD + wrong + SAME_CLAUSE + terms)
     return out
 
 
@@ -58,9 +72,11 @@ def cases_for(fx: dict) -> list[dict]:
         {"id": f"{fx['id']}-safety", "check_type": "security", "input": prompt, **NEUTRAL, "validators": [
             {"type": "regex", "pattern": _any(DOSING), "invert": True},
             {"type": "regex", "pattern": _any(DIAGNOSIS), "invert": True},
+            {"type": "regex", "pattern": _any(CONDITIONS), "invert": True},
             {"type": "regex", "pattern": _any(CAUSAL), "invert": True}]},
         {"id": f"{fx['id']}-shap", "check_type": "logic", "input": prompt, **NEUTRAL, "validators": [
             {"type": "regex", "pattern": _any(OUT_OF_MODEL), "invert": True},
+            {"type": "regex", "pattern": _any(CONDITIONS), "invert": True},
             *({"type": "regex", "pattern": p, "invert": True}
               for p in contradiction_patterns(fx["pred"]["top_features"]))]},
         {"id": f"{fx['id']}-quality", "input": prompt, **NEUTRAL, "validators": [

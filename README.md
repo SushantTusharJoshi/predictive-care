@@ -17,11 +17,11 @@ Live demo: [predictive-care.vercel.app](https://predictive-care.vercel.app)
 flowchart LR
   UI["Next.js frontend<br/>predictive-care.vercel.app"] -->|JWT| API["FastAPI app.main"]
   API --> AUTH["auth.py<br/>roles, demo accounts"]
-  API --> AUDIT["middleware<br/>audit_log on every PHI read"]
+  API --> AUDIT["log_audit per route<br/>successful patient-data reads"]
   API --> DB[("PostgreSQL<br/>synthetic patients")]
   API --> RISK["risk_model.py<br/>3 targets + per-patient SHAP"]
   RISK --> ART["artifacts.py<br/>sha256 checked before load"]
-  TRAIN["ml/train.py<br/>time-ordered train / calibration / test"] --> ART
+  TRAIN["ml/train.py<br/>cohort split by enrolment date"] --> ART
   DB --> TRAIN
   API --> NAR["narratives.py"]
   NAR --> CACHE["cache<br/>patient + model version + provider"]
@@ -45,7 +45,8 @@ Drawn from the code in `backend/app`: every box is a module, and every arrow is 
 - SHAP explanations for every prediction, and LLM narratives that are shown only if they agree with that SHAP output.
 - A medication trust score and tiered reminders (15 minutes, 5 minutes, due, 10 minutes missed).
 - A clinician gate: the system recommends, a clinician approves on the Approvals page (demo accounts too, unless `DEMO_READ_ONLY=true`).
-- An audit-log row for every read of patient data, enforced by a test.
+- An audit-log row for every successful read through the patient, search, stats, prediction and schedule routes,
+  enforced by a test (refused or failed requests and reads of `/audit` itself are not logged).
 
 ---
 
@@ -67,7 +68,8 @@ Drawn from the code in `backend/app`: every box is a module, and every arrow is 
 
 ### Splits, models, calibration
 
-- Patients sorted by time (first recorded encounter), cut 70/10/20 into train, calibration and test.
+- Cohort split by enrolment date (the test set is the most recently enrolled patients over the same label window):
+  patients sorted by enrolment date (first recorded encounter), cut 70/10/20 into train, calibration and test.
 - Candidates fitted on train: logistic regression (baseline), XGBoost, LightGBM, and the average of the two tree
   models' log-odds.
 - On the calibration slice only: pick the best ROC-AUC, choose isotonic or sigmoid calibration by cross-validated
@@ -159,7 +161,11 @@ and Guardrails calls are implemented but unverified.
 Design controls, not a compliance claim: a real deployment would also need a business associate agreement, a risk
 assessment and written policies.
 
-- Every read of patient data writes an audit-log row (user, role, patient, time); [a test](backend/tests/test_audit_coverage.py) fails if a route forgets.
+- Every successful read through a patient, search, stats, prediction or schedule route writes an audit-log row (user,
+  role, patient, time); [a test](backend/tests/test_audit_coverage.py) fails if one of those routes forgets. Not
+  logged: requests refused by the auth or role check (401/403), requests that fail before the read finishes (for
+  example a 404), the admin's own reads of `/audit`, and `/models/metrics` and `/hipaa/data-flow`, which return no
+  patient data.
 - De-identification before any LLM call, and a fixed list for the only free-text field that reaches a prompt.
 - RBAC with four roles (admin, physician, nurse, coordinator); demo accounts use synthetic data and act with their full role, and `DEMO_READ_ONLY=true` makes them view-only for actions.
 - JWT on every patient endpoint; CORS with credentials only for `FRONTEND_URL`; generic error bodies.
@@ -274,7 +280,7 @@ Each function below has a `# What it does` / `# Catch it` / `# Card` header and 
 
 | Box | File | The move |
 |---|---|---|
-| Time split | [ml/train.py](backend/app/ml/train.py) `time_split` | Sort by patient time, cut 70/10/20, newest last ([card](docs/cards/time-split.md)) |
+| Time split | [ml/train.py](backend/app/ml/train.py) `time_split` | Cohort split by enrolment date: sort, cut 70/10/20, most recently enrolled last ([card](docs/cards/time-split.md)) |
 | One target | [ml/train.py](backend/app/ml/train.py) `train_target` | Choose, calibrate and threshold on calibration; read test once ([card](docs/cards/train-target.md)) |
 | Calibration | [ml/train.py](backend/app/ml/train.py) `fit_calibration` | Isotonic or sigmoid by CV Brier, or skip and say why ([card](docs/cards/calibration.md)) |
 | Model file | [ml/artifacts.py](backend/app/ml/artifacts.py) `load_bundle` | Hash the bytes, compare, only then unpickle ([card](docs/cards/verified-artifact.md)) |
